@@ -58,7 +58,7 @@ import argparse
 import asyncio
 import json
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +72,7 @@ from src.config.prompts import load_templates  # noqa: E402
 from src.config.settings import get_settings  # noqa: E402
 from src.db.connection import close_pool, get_pool  # noqa: E402
 from src.db.kb import KB_STRESS  # noqa: E402
+from src.rag.ambiguity import check_ambiguity  # noqa: E402
 from src.rag.retriever import retrieve  # noqa: E402
 
 DATASET = Path(__file__).resolve().parent / "local" / "dataset_layered_50q.jsonl"
@@ -109,10 +110,23 @@ def load_dataset() -> list[dict]:
     return rows
 
 
-def is_refusal(ans: str) -> bool:
-    """四条出口里**只有两条算**（设计文档 §四）。"""
+def refuse_exit(ans: str, err: str | None) -> str:
+    """**四条出口，只有两条算拒答**（`layered_eval_design.md §四`）。
+
+    取值域：`sentinel` ／ `no_answer_text` ／ `none`
+    ⚠️ **外加一个 spec 没枚举的状态 `gen_error`** —— 调用失败**不是"没答案"**，
+    据实说清；`refused` 遇它取 `None`（**判不了，不硬判**）。
+    """
+    if err:
+        return "gen_error"
     a = (ans or "").strip()
-    return (not a) or (SENTINEL in a) or (_NO_ANSWER_TEXT[:15] in a)
+    if not a:
+        return "no_answer_text"          # 生成环节返回空（`chat_api._NO_ANSWER_TEXT` 那条）
+    if SENTINEL in a:
+        return "sentinel"                # 系统提示词写死的哨兵句
+    if _NO_ANSWER_TEXT[:15] in a:
+        return "no_answer_text"
+    return "none"
 
 
 def rank_of(chunks, anchors: list[str]) -> tuple[int | None, list[int | None]]:
@@ -149,14 +163,41 @@ async def one_round(name: str, mode: dict, dataset, kb: str, top: int, model, se
                                    kb=kb, top_k=top, **mode)
         rank, each = rank_of(chunks, row.get("anchors") or [])
         ctx = "\n\n".join(f"[来源{i}] {c.content}" for i, c in enumerate(chunks, start=1))
+        # ⭐ 歧义判定（三态）—— **只落字段，不算拒答**（spec §五①：别让"该澄清"混进"误拒"）
+        amb = await check_ambiguity(row["question"], chunks)
         ans, err = await ask(model, sem, system, human, ctx, row["question"])
+
         hit_src = chunks[rank - 1].source_file if rank else None
-        # ⭐ 无答案题的**诱饵是否真被召回** —— 没召回，这题就退化成"啥也没找到"，测不出"会不会编"
         bait = row.get("bait") or []
+        bait_hit = bool(bait) and any(c.source_file in bait for c in chunks)
+        rx = refuse_exit(ans, err)
+        refused = None if rx == "gen_error" else rx != "none"
+
+        # ⭐ 语境判定 —— 把"喂了什么"变成"**够不够**"（spec §五②）
+        if row.get("anchors"):
+            ctx_ok, ctx_rule = rank is not None, "anchor_in_topk"
+        elif bait:
+            ctx_ok, ctx_rule = bait_hit, "bait_in_topk"
+        else:
+            ctx_ok, ctx_rule = False, "empty"
+
+        # ⭐ 伴随量（spec §五③）—— **只自动判确定性的那一半**，其余 `null` + `manual` 交人
+        if rx == "gen_error":
+            answer_wrong, answer_judge = None, "manual"
+        elif row.get("should_refuse"):
+            # 该拒的题：拒了 = 对；⚠️ **没拒 → 它给了答案，是不是编的必须人看**
+            answer_wrong, answer_judge = (False, "auto_sentinel") if refused else (None, "manual")
+        else:
+            # 有答案的题：拒了 = 没答出来 = 错；答了 → 对不对要人看
+            answer_wrong, answer_judge = (True, "auto_sentinel") if refused else (None, "manual")
+
         return {"id": row["id"], "kind": row["kind"], "rank": rank, "ranks_each": each,
                 "hit_source": hit_src, "answer": ans, "gen_error": err,
-                "bait_hit": bool(bait) and any(c.source_file in bait for c in chunks),
-                "refused": None if err else is_refusal(ans)}
+                "refuse_exit": rx, "refused": refused,
+                "need_clarification": amb.ambiguous, "judge_status": amb.status,
+                "ctx_ok": ctx_ok, "ctx_rule": ctx_rule,
+                "answer_wrong": answer_wrong, "answer_judge": answer_judge,
+                "bait_hit": bait_hit}
 
     out = await asyncio.gather(*(one(r) for r in dataset))
     print(f"  [{name}] 完成（模式实际生效值：{mode}）")
@@ -194,13 +235,42 @@ def summarize(rows: list[dict], name: str) -> dict:
           + (f"   ⚠️ 生成失败 {sum(1 for r in na if r['refused'] is None)} 题"
              if any(r["refused"] is None for r in na) else ""))
     print(f"  误拒率     = {false_ref}/{len(ok)}"
-          "   ⚠️ **必须与拒答正确率一起看** —— 只报前者可以靠'全拒'刷满")
+          "   ⚠️ **必须与拒答正确率一起看** —— 只报前者可以靠「全拒」刷满")
+
+    # ⭐ 新增字段的分布（spec §五）—— 这些以前**只在报告里、不在产物里** → 回归时复现不了
+    print("\n  字段分布（spec §五）：")
+    print("    refuse_exit  =", dict(Counter(r["refuse_exit"] for r in rows)))
+    print("    judge_status =", dict(Counter(r["judge_status"] for r in rows)))
+    print(f"    need_clarification = {sum(1 for r in rows if r['need_clarification'])} 题"
+          "   ❌ **不算拒答**（「资料打架」≠「没答案」）")
+    print(f"    ctx_ok       = {sum(1 for r in rows if r['ctx_ok'])}/{len(rows)}"
+          "   ⭐ 喂给模型的上下文里**够不够**（以前只能从 rank 反推，现在落字段）")
+    aw = Counter(r["answer_wrong"] for r in rows)
+    print(f"    answer_wrong = True {aw[True]} ｜ False {aw[False]} ｜ **未判 {aw[None]}**")
+    unchecked = [r["id"] for r in rows if r["answer_wrong"] is None]
+    if unchecked:
+        print(f"    ⚠️ **待人工/LLM 判的题 {len(unchecked)} 道**：{unchecked}")
     return {"per_kind": per_kind, "overall": tot,
             "refuse_ok": refused_ok, "refuse_n": len(na),
-            "false_refuse": false_ref, "false_n": len(ok)}
+            "false_refuse": false_ref, "false_n": len(ok),
+            # ⭐ spec §五 的字段分布 —— 回归 harness 直接吃这些，**不用去报告里抄**
+            "refuse_exit": dict(Counter(r["refuse_exit"] for r in rows)),
+            "judge_status": dict(Counter(r["judge_status"] for r in rows)),
+            "need_clarification": sum(1 for r in rows if r["need_clarification"]),
+            "ctx_ok": sum(1 for r in rows if r["ctx_ok"]),
+            "answer_wrong": {str(k): v for k, v in
+                             Counter(r["answer_wrong"] for r in rows).items()},
+            "answer_unjudged": [r["id"] for r in rows if r["answer_wrong"] is None]}
 
 
 async def main() -> int:
+    # ⚠️ 输出重定向到文件时 stdout 是**块缓冲**的 → 中间进度不落盘，只能靠猜。
+    #    行缓冲后，`> file` 也能实时看到进度（2026-10-08 实测踩过）。
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:  # noqa: BLE001
+        pass
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--kb", default=KB_STRESS)
     ap.add_argument("--top", type=int, default=5)
