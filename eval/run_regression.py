@@ -129,11 +129,32 @@ def compare(base_path: str, cur_path: str) -> int:
             if ch < bh:
                 red = True
             print(f"    {k}：{bh:.4f} → {ch:.4f}   {flag}")
+        # ⭐ AllHit@3 —— 冲突 / 多跳要的是「**每份出处都进**」，不是「至少一份进」
+        ab, an = _allhit(b["rows"], 3)
+        ac, acn = _allhit(c["rows"], 3)
+        flag = "🔴 红" if ac < ab else ("✅" if ac == ab else "🟢 升")
+        if ac < ab:
+            red = True
+        print(f"    ⭐ AllHit@3（每份出处都进 top-3 ｜多 anchor 题 {acn} 道）："
+              f"{ab}/{an} → {ac}/{acn}   {flag}")
+
+        # ---- 生成类：⛔ 线**不是拍的** —— 来自抖动实测（`§3.4`）----
         bs, cs = b["summary"], c["summary"]
-        print(f"    拒答正确率：{bs['refuse_ok']}/{bs['refuse_n']} → {cs['refuse_ok']}/{cs['refuse_n']}"
-              "   ⚠️ **必须与误拒率一起看**")
-        print(f"    误拒率：  {bs['false_refuse']}/{bs['false_n']} → {cs['false_refuse']}/{cs['false_n']}"
-              "   ⚠️ 只报拒答率可以靠「全拒」刷满")
+        ro_min, fr_max = GEN_RED.get(arm, (None, None))
+        print(f"    拒答正确率：{bs['refuse_ok']}/{bs['refuse_n']} → {cs['refuse_ok']}/{cs['refuse_n']}")
+        if ro_min is not None and cs["refuse_n"] and cs["refuse_ok"] <= ro_min:
+            print(f"      🔴 红（告警线 **≤ {ro_min}/{cs['refuse_n']}** —— 来自抖动实测，不是拍的）")
+            red = True
+        print(f"    误拒率：  {bs['false_refuse']}/{bs['false_n']} → {cs['false_refuse']}/{cs['false_n']}")
+        if fr_max is not None and cs["false_refuse"] >= fr_max:
+            print(f"      🔴 红（告警线 **≥ {fr_max}/{cs['false_n']}**）")
+            red = True
+        print("      ⚠️ 两者**必须一起判** —— 只报拒答率可以靠「全拒」刷满")
+        for tag, s in (("基线", bs), ("本次", cs)):
+            if s.get("gen_error_n"):
+                print(f"      ❗ {tag} `gen_error_n` = {s['gen_error_n']}（**已剔出上面两个分母**）")
+        if ro_min is None:
+            print(f"      ⚠️ 臂「{arm}」**没有生成类告警线** —— 只记录，不判红")
 
         # ---- L2 分层：⚠️ 只"注意"，除非掉到 0 ----
         print("  L2 分层（**只注意，不判红** —— 小分母类 1 题 = 20%）：")
@@ -168,6 +189,23 @@ def _worse(before, after) -> bool:
     if before is None:
         return False
     return after is None or after > before
+
+
+def _allhit(rows: list[dict], k: int) -> tuple[int, int]:
+    """`AllHit@K` —— **每份出处都要进 top-K**（口径 `layered_eval_design §十`）。
+
+    ⚠️ 只统计**多 anchor** 的题：单 anchor 题的 `AllHit ≡ R@K`，混进来会把信号稀释。
+    ⛔ **不新增字段** —— 直接算自 `ranks_each`（同一事实两个来源必然漂移，`2.0-51`）。
+    """
+    multi = [r for r in rows if r["kind"] != "no_answer" and len(r.get("ranks_each") or []) > 1]
+    hit = sum(1 for r in multi if all(x is not None and x <= k for x in r["ranks_each"]))
+    return hit, len(multi)
+
+
+# 生成类告警线 —— ⭐ **从我们自己的抖动数长出来**（`regression_spec §3.4`，2026-10-08）
+# 规则：**差异必须严格超过观测抖动** → 线 = 基线 ∓ (抖动 + 1) 题
+# 取值：(拒答正确率 **≤** 此值 → 红,  误拒率 **≥** 此值 → 红)
+GEN_RED = {"纯向量": (3, 3), "混合+重排": (3, 5)}
 
 
 def main() -> int:

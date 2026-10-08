@@ -227,15 +227,21 @@ def summarize(rows: list[dict], name: str) -> dict:
         cells.append(f"{hit}/{len(gradable)}")
     print(f"  {'— 合计':<10}{len(gradable):>4}" + "".join(f"{c:>12}" for c in cells))
 
-    na = [r for r in rows if r["kind"] == "no_answer"]
+    # ⚠️ `gen_error`（生成失败）**必须剔出生成类的所有分母**（口径 `§1.79②`）：
+    #    落在无答案题 → 拒答正确率**被压低**（看着更差）；落在有答案题 → 误拒率**被稀释**（看着更好）
+    #    —— **两个都不是真数字。**
+    gen_err_n = sum(1 for r in rows if r["refuse_exit"] == "gen_error")
+    na = [r for r in rows if r["kind"] == "no_answer" and r["refused"] is not None]
     ok = [r for r in gradable if r["refused"] is not None]
     refused_ok = sum(1 for r in na if r["refused"])
     false_ref = sum(1 for r in ok if r["refused"])
-    print(f"\n  拒答正确率 = {refused_ok}/{len(na)}"
-          + (f"   ⚠️ 生成失败 {sum(1 for r in na if r['refused'] is None)} 题"
-             if any(r["refused"] is None for r in na) else ""))
+    print(f"\n  拒答正确率 = {refused_ok}/{len(na)}")
     print(f"  误拒率     = {false_ref}/{len(ok)}"
           "   ⚠️ **必须与拒答正确率一起看** —— 只报前者可以靠「全拒」刷满")
+    if gen_err_n:
+        print(f"  ❗ **gen_error_n = {gen_err_n} 题**（**已剔出上面两个分母**）")
+    print("  📌 **`R@K` 不受影响** —— 那是检索层，生成失败时 `rank` 照样有效；"
+          "把生成失败剔出 `R@K` 分母反而会**掩盖真实回归**")
 
     # ⭐ 新增字段的分布（spec §五）—— 这些以前**只在报告里、不在产物里** → 回归时复现不了
     print("\n  字段分布（spec §五）：")
@@ -253,6 +259,7 @@ def summarize(rows: list[dict], name: str) -> dict:
     return {"per_kind": per_kind, "overall": tot,
             "refuse_ok": refused_ok, "refuse_n": len(na),
             "false_refuse": false_ref, "false_n": len(ok),
+            "gen_error_n": gen_err_n,          # ⚠️ 生成失败：**单列**，且已剔出上面两个分母
             # ⭐ spec §五 的字段分布 —— 回归 harness 直接吃这些，**不用去报告里抄**
             "refuse_exit": dict(Counter(r["refuse_exit"] for r in rows)),
             "judge_status": dict(Counter(r["judge_status"] for r in rows)),
