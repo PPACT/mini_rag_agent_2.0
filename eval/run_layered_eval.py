@@ -77,10 +77,15 @@ from src.rag.retriever import retrieve  # noqa: E402
 
 DATASET = Path(__file__).resolve().parent / "local" / "dataset_layered_50q.jsonl"
 
-# ⚠️ 两轮都把**三个开关显式给全**（§四 的静默陷阱）；名字即产物里的列名
+# ⚠️ 每个臂都把**三个开关显式给全**（§四 的静默陷阱）；名字即产物里的列名。
+# ⭐ `2.0-49` **四臂**（`提醒 #14` 第 1 批）：把「混合」与「重排」**拆开** ——
+#    原来那两轮**差了整整两个变量**（`hybrid` 与 `rerank` 同开同关），
+#    所以「`R@1` 升 / `R@3` 降」**归因不了**（`P-7`：一次只改一个变量）。
 ROUNDS: dict[str, dict] = {
-    "纯向量": {"use_rewrite": False, "use_rerank": False, "use_hybrid": False},
-    "混合+重排": {"use_rewrite": False, "use_rerank": True, "use_hybrid": True},
+    "纯向量":    {"use_rewrite": False, "use_rerank": False, "use_hybrid": False},
+    "混合-only": {"use_rewrite": False, "use_rerank": False, "use_hybrid": True},
+    "重排-only": {"use_rewrite": False, "use_rerank": True,  "use_hybrid": False},
+    "混合+重排": {"use_rewrite": False, "use_rerank": True,  "use_hybrid": True},
 }
 
 KIND_CN = {
@@ -159,9 +164,20 @@ async def ask(model, sem, system: str, human: str, ctx: str, q: str) -> tuple[st
 
 async def one_round(name: str, mode: dict, dataset, kb: str, top: int, model, sem, system, human):
     async def one(row) -> dict:
+        # ⭐ 传 `trace` 进去（传引用）—— 拿**重排之前**的粗排候选池。
+        #    这是 `提醒 #15` H1/H2 的判据：anchor 块**在不在**那 20 条里。
+        trace: dict = {}
         _, chunks = await retrieve(row["question"], EVAL_DEPARTMENT, EVAL_SECRET_LEVEL,
-                                   kb=kb, top_k=top, **mode)
+                                   kb=kb, top_k=top, trace=trace, **mode)
         rank, each = rank_of(chunks, row.get("anchors") or [])
+        # ---- 重排**之前**：anchor 在池里的位置与它的**向量分**（`None` = 压根没进池 = H1）----
+        cands = trace.get("candidates") or []
+        anchors = row.get("anchors") or []
+        pre_rank, pre_vec_score = None, None
+        for i, c in enumerate(cands, start=1):
+            if anchors and any(a in (c.content or "") for a in anchors):
+                pre_rank, pre_vec_score = i, c.score
+                break
         ctx = "\n\n".join(f"[来源{i}] {c.content}" for i, c in enumerate(chunks, start=1))
         # ⭐ 歧义判定（三态）—— **只落字段，不算拒答**（spec §五①：别让"该澄清"混进"误拒"）
         amb = await check_ambiguity(row["question"], chunks)
@@ -192,6 +208,8 @@ async def one_round(name: str, mode: dict, dataset, kb: str, top: int, model, se
             answer_wrong, answer_judge = (True, "auto_sentinel") if refused else (None, "manual")
 
         return {"id": row["id"], "kind": row["kind"], "rank": rank, "ranks_each": each,
+                # ⭐ `提醒 #15`：重排**之前**的池内位置 ＋ 向量分（H1/H2 的判据）
+                "pre_rank": pre_rank, "pre_vec_score": pre_vec_score, "pool_n": len(cands),
                 "hit_source": hit_src, "answer": ans, "gen_error": err,
                 "refuse_exit": rx, "refused": refused,
                 "need_clarification": amb.ambiguous, "judge_status": amb.status,
