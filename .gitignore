@@ -69,3 +69,13 @@ htmlcov/
 logs/
 .DS_Store
 Thumbs.db
+
+# ===== 前端（web/，归前端侧）=====
+# ⛔ **装依赖之前必须在这儿挡住** —— 否则 `git add` 一次卷进几万个文件（`提醒 #18`）。
+# ⚠️ 闸要在 `.gitignore` 里，不能靠"小心点、别 git add -A"（`R-4` 是纪律不是闸）。
+node_modules/
+web/dist/
+web/build/
+*.tsbuildinfo
+# ⚠️ 将来出现的**新构建产物**一律往这块加（别等它先进了仓库再补）
+# 注：`.env` / `.env.*` 已在文件顶部统一忽略（含 `web/.env.local`）
