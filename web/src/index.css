@@ -1,0 +1,194 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/*
+ * 主题：Slate 灰蓝 + Blue 强调色（`前端ui设计.md` §三）。
+ * ⚠️ 深色底色用 Slate 900 (#0f172a)，⛔ 不用纯黑。
+ */
+:root {
+    --background: oklch(0.984 0.003 247.858);   /* slate-50  */
+    --foreground: oklch(0.208 0.042 265.755);   /* slate-900 */
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.208 0.042 265.755);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.208 0.042 265.755);
+    --primary: oklch(0.546 0.245 262.881);      /* blue-600  */
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.968 0.007 247.896);    /* slate-100 */
+    --secondary-foreground: oklch(0.208 0.042 265.755);
+    --muted: oklch(0.968 0.007 247.896);
+    --muted-foreground: oklch(0.554 0.046 257.417); /* slate-500 */
+    --accent: oklch(0.968 0.007 247.896);
+    --accent-foreground: oklch(0.208 0.042 265.755);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.929 0.013 255.508);       /* slate-200 */
+    --input: oklch(0.929 0.013 255.508);
+    --ring: oklch(0.623 0.214 259.815);         /* blue-500  */
+    --chart-1: oklch(0.623 0.214 259.815);      /* blue-500    */
+    --chart-2: oklch(0.606 0.25 292.717);       /* violet-500  */
+    --chart-3: oklch(0.696 0.17 162.48);        /* emerald-500 */
+    --chart-4: oklch(0.769 0.188 70.08);        /* amber-500   */
+    --chart-5: oklch(0.645 0.246 16.439);       /* rose-500    */
+    --radius: 0.625rem;
+    --sidebar: oklch(1 0 0);
+    --sidebar-foreground: oklch(0.208 0.042 265.755);
+    --sidebar-primary: oklch(0.546 0.245 262.881);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.968 0.007 247.896);
+    --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
+    --sidebar-border: oklch(0.929 0.013 255.508);
+    --sidebar-ring: oklch(0.623 0.214 259.815);
+}
+
+.dark {
+    --background: oklch(0.208 0.042 265.755);   /* slate-900 (#0f172a)，⛔ 非纯黑 */
+    --foreground: oklch(0.984 0.003 247.858);
+    --card: oklch(0.279 0.041 260.031);         /* slate-800 (#1e293b) */
+    --card-foreground: oklch(0.984 0.003 247.858);
+    --popover: oklch(0.279 0.041 260.031);
+    --popover-foreground: oklch(0.984 0.003 247.858);
+    --primary: oklch(0.623 0.214 259.815);      /* blue-500 */
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.279 0.041 260.031);
+    --secondary-foreground: oklch(0.984 0.003 247.858);
+    --muted: oklch(0.279 0.041 260.031);
+    --muted-foreground: oklch(0.704 0.04 256.788); /* slate-400 */
+    --accent: oklch(0.279 0.041 260.031);
+    --accent-foreground: oklch(0.984 0.003 247.858);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 12%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.623 0.214 259.815);
+    --chart-1: oklch(0.707 0.165 254.624);      /* blue-400   */
+    --chart-2: oklch(0.702 0.183 293.541);      /* violet-400 */
+    --chart-3: oklch(0.765 0.177 163.223);      /* emerald-400*/
+    --chart-4: oklch(0.828 0.189 84.429);       /* amber-400  */
+    --chart-5: oklch(0.712 0.194 13.428);       /* rose-400   */
+    --sidebar: oklch(0.279 0.041 260.031);
+    --sidebar-foreground: oklch(0.984 0.003 247.858);
+    --sidebar-primary: oklch(0.623 0.214 259.815);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.279 0.041 260.031);
+    --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
+    --sidebar-border: oklch(1 0 0 / 12%);
+    --sidebar-ring: oklch(0.623 0.214 259.815);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  html {
+    @apply font-sans;
+    }
+  /* 交互动画一律丝滑过渡（`前端ui设计.md` §三-5） */
+  button, a, [role="tab"], .transition-all {
+    @apply transition-all duration-200;
+  }
+}
+
+/*
+ * 排版基元 —— 照 `参考资料/RAG 项目前端 UIUX 重构指南_20261010.md` §三-3 的**字体层级**。
+ * ⭐ 密度高的小工具界面，靠**字号/字重/字距的对比**分层，不靠留白堆砌。
+ */
+@layer components {
+  /* 微型标签（每个卡片顶上的小标题） */
+  .micro-label {
+    @apply text-[10px] font-semibold tracking-[0.12em] text-muted-foreground/70 uppercase;
+  }
+  /* 面板容器（统一圆角 ＋ 细边 ＋ 微阴影） */
+  .panel {
+    @apply rounded-xl border border-border bg-card shadow-sm;
+  }
+  /* 面板头（标题 ＋ 右侧动作） */
+  .panel-head {
+    @apply flex items-center justify-between gap-2 border-b border-border/60 px-3.5 py-2.5;
+  }
+  /* 面板标题 */
+  .panel-title {
+    @apply text-sm font-semibold tracking-tight;
+  }
+  /* 核心数字（KPI） */
+  .metric-xl {
+    @apply text-2xl font-bold tracking-tight tabular-nums;
+  }
+  /* 表格/列表里的数据文字 */
+  .data-xs {
+    @apply font-mono text-xs tabular-nums;
+  }
+}
+
+/*
+ * Markdown 正文样式（`react-markdown` 的输出）。
+ * ⚠️ 手写元素样式，⛔ 不引 `@tailwindcss/typography` —— 本项目有「依赖先量」的规矩，
+ *    而这里只有十来个元素要管。
+ */
+.md-body { @apply text-sm leading-relaxed text-foreground; }
+.md-body > :first-child { @apply mt-0; }
+.md-body > :last-child { @apply mb-0; }
+.md-body p { @apply my-2; }
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 { @apply mt-4 mb-2 font-semibold tracking-tight; }
+.md-body h1 { @apply text-lg; }
+.md-body h2 { @apply text-base; }
+.md-body h3, .md-body h4 { @apply text-sm; }
+.md-body ul { @apply my-2 list-disc space-y-1 pl-5; }
+.md-body ol { @apply my-2 list-decimal space-y-1 pl-5; }
+.md-body a { @apply text-primary underline underline-offset-4; }
+.md-body code { @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.8em]; }
+.md-body pre { @apply my-3 overflow-x-auto rounded-lg bg-muted p-3; }
+.md-body pre code { @apply bg-transparent p-0; }
+.md-body blockquote { @apply my-2 border-l-2 border-border pl-3 text-muted-foreground; }
+.md-body table { @apply my-3 w-full border-collapse text-xs; }
+.md-body th, .md-body td { @apply border border-border px-2 py-1 text-left; }
+.md-body th { @apply bg-muted font-medium; }
+.md-body hr { @apply my-4 border-border; }
