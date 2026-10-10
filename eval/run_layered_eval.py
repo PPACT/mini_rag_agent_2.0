@@ -103,6 +103,12 @@ SENTINEL = "知识库中没有找到相关信息"
 EVAL_DEPARTMENT = ["IT", "公司"]
 EVAL_SECRET_LEVEL = 3
 CONCURRENCY = 5
+
+# ⭐ `2.0-60` 诊断：**检索**的并发闸。⛔ **0 = 现状（全并发，与历史产物一致）**。
+# ⚠️ 为什么单列它：下面那个 `CONCURRENCY=5` **只卡生成（`ask`）**，**不卡检索** ——
+#    而检索是**整批 `asyncio.gather` 全并发**的，分段耗时里混着**排队时间**（`§1.111`）。
+#    显式传 N>0 才能把"排队"和"服务"分开量。
+RETRIEVE_CONCURRENCY = 0
 RETRIES = 3
 
 
@@ -250,8 +256,20 @@ async def one_round(name: str, mode: dict, dataset, kb: str, top: int, model, se
                 "cache_hit": False,
                 "bait_hit": bait_hit}
 
-    out = await asyncio.gather(*(one(r) for r in dataset))
-    print(f"  [{name}] 完成（模式实际生效值：{mode}）")
+    # ⭐ `2.0-60` 诊断开关：⛔ **默认 0 = 现状（全并发）** —— **不改默认行为**，
+    #    已有产物因此仍可比。显式传 N>0 才限流（`--concurrency 1` = 完全串行）。
+    #    ⚠️ 它**只影响跑法，不影响结果** —— 但**会改变分段耗时的含义**（排队 vs 服务）。
+    if RETRIEVE_CONCURRENCY and RETRIEVE_CONCURRENCY > 0:
+        gate = asyncio.Semaphore(RETRIEVE_CONCURRENCY)
+
+        async def guarded(row):
+            async with gate:
+                return await one(row)
+        out = await asyncio.gather(*(guarded(r) for r in dataset))
+    else:
+        out = await asyncio.gather(*(one(r) for r in dataset))
+    print(f"  [{name}] 完成（模式实际生效值：{mode}；检索并发="
+          f"{RETRIEVE_CONCURRENCY or '不限（默认，与历史产物一致）'}）")
     return list(out)
 
 
@@ -422,7 +440,12 @@ async def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 题（⚠️ 只给冒烟用；0 = 全跑）")
     ap.add_argument("--rounds", nargs="*", default=list(ROUNDS))
     ap.add_argument("--json", default=str(ROOT / "logs" / "layered_eval.json"))
+    ap.add_argument("--retrieve-concurrency", type=int, default=0,
+                    help="⭐ `2.0-60` 诊断：检索并发闸。0（默认）= 全并发，"
+                         "**与历史产物一致**；传 1 = 完全串行（把「排队」从耗时里剥出来）")
     args = ap.parse_args()
+    global RETRIEVE_CONCURRENCY
+    RETRIEVE_CONCURRENCY = args.retrieve_concurrency
 
     from eval.check_ingest_complete import check as gate
     g = await gate(args.kb, str(CORPUS_DIR))
