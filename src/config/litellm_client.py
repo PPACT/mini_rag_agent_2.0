@@ -62,6 +62,13 @@ class LLMReply:
     text: str
     finish_reason: str | None = None
 
+    # ⭐ `2.0-59` 工程层埋点：**token 用量**（此前一个数都没有）。
+    #    ⚠️ 字段名用 provider 的原生名（`prompt_tokens`/`completion_tokens`），
+    #    不做"input/output"改写 —— 换 provider 时对得上文档。
+    #    `None` = **这一次没拿到用量**（不是 0）—— 别把"没数据"记成"零成本"。
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
     @property
     def answered(self) -> bool:
         """模型是否给出了**可用内容**（纯空白不算答了）。"""
@@ -137,7 +144,15 @@ async def complete_with_meta(messages: list[dict], temperature: float = 0.1) -> 
         audit("thinking_leaked", provider=settings.llm_provider,
               model=settings.llm_model, reasoning_chars=len(leaked))
 
-    return LLMReply(text=msg.content or "", finish_reason=getattr(resp.choices[0], "finish_reason", None))
+    # ⭐ `2.0-59`：把用量带出来。⚠️ provider 可能不给 `usage`（或给 `None`）→ **如实记 None**，
+    #    ⛔ 不要 `getattr(..., 0)` 把"没拿到"伪装成"用了 0"。
+    usage = getattr(resp, "usage", None)
+    return LLMReply(
+        text=msg.content or "",
+        finish_reason=getattr(resp.choices[0], "finish_reason", None),
+        prompt_tokens=getattr(usage, "prompt_tokens", None) if usage else None,
+        completion_tokens=getattr(usage, "completion_tokens", None) if usage else None,
+    )
 
 
 async def complete(messages: list[dict], temperature: float = 0.1) -> str:

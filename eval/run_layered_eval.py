@@ -58,12 +58,14 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from eval.l0_report import pct_nearest_rank  # noqa: E402  ⭐ 分位**唯一实现**，不另写一份
 from eval.paths import CORPUS_DIR  # noqa: E402
 from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
 from src.agent.graph_builder import _build_model  # noqa: E402  ⭐ 与生成链路同一个构造器
@@ -147,13 +149,23 @@ def rank_of(chunks, anchors: list[str]) -> tuple[int | None, list[int | None]]:
     return (min(got) if got else None), each
 
 
-async def ask(model, sem, system: str, human: str, ctx: str, q: str) -> tuple[str, str | None]:
+async def ask(model, sem, system: str, human: str, ctx: str, q: str,
+              usage_out: dict | None = None) -> tuple[str, str | None]:
     async with sem:
         last: Exception | None = None
         for _ in range(RETRIES):
             try:
                 m = await model.ainvoke([SystemMessage(system),
                                          HumanMessage(human.format(context=ctx, question=q))])
+                # ⭐ `2.0-59`：生成链路**不走 litellm** → 用量从 langchain 的
+                #    `usage_metadata` 取。⚠️ 拿不到就**留 `None`**，⛔ 不写 0。
+                if usage_out is not None:
+                    um = getattr(m, "usage_metadata", None) or {}
+                    usage_out.update({
+                        "prompt_tokens": um.get("input_tokens"),
+                        "completion_tokens": um.get("output_tokens"),
+                        "called": True,
+                    })
                 c = m.content
                 return (("".join(p.get("text", "") for p in c) if isinstance(c, list) else str(c)).strip(),
                         None)
@@ -167,8 +179,10 @@ async def one_round(name: str, mode: dict, dataset, kb: str, top: int, model, se
         # ⭐ 传 `trace` 进去（传引用）—— 拿**重排之前**的粗排候选池。
         #    这是 `提醒 #15` H1/H2 的判据：anchor 块**在不在**那 20 条里。
         trace: dict = {}
+        t0 = time.perf_counter()
         _, chunks = await retrieve(row["question"], EVAL_DEPARTMENT, EVAL_SECRET_LEVEL,
                                    kb=kb, top_k=top, trace=trace, **mode)
+        retrieve_ms = (time.perf_counter() - t0) * 1000
         rank, each = rank_of(chunks, row.get("anchors") or [])
         # ---- 重排**之前**：anchor 在池里的位置与它的**向量分**（`None` = 压根没进池 = H1）----
         cands = trace.get("candidates") or []
@@ -180,8 +194,14 @@ async def one_round(name: str, mode: dict, dataset, kb: str, top: int, model, se
                 break
         ctx = "\n\n".join(f"[来源{i}] {c.content}" for i, c in enumerate(chunks, start=1))
         # ⭐ 歧义判定（三态）—— **只落字段，不算拒答**（spec §五①：别让"该澄清"混进"误拒"）
-        amb = await check_ambiguity(row["question"], chunks)
-        ans, err = await ask(model, sem, system, human, ctx, row["question"])
+        amb_usage: dict = {}
+        t0 = time.perf_counter()
+        amb = await check_ambiguity(row["question"], chunks, usage_out=amb_usage)
+        ambiguity_ms = (time.perf_counter() - t0) * 1000
+        gen_usage: dict = {}
+        t0 = time.perf_counter()
+        ans, err = await ask(model, sem, system, human, ctx, row["question"], usage_out=gen_usage)
+        generate_ms = (time.perf_counter() - t0) * 1000
 
         hit_src = chunks[rank - 1].source_file if rank else None
         bait = row.get("bait") or []
@@ -215,11 +235,86 @@ async def one_round(name: str, mode: dict, dataset, kb: str, top: int, model, se
                 "need_clarification": amb.ambiguous, "judge_status": amb.status,
                 "ctx_ok": ctx_ok, "ctx_rule": ctx_rule,
                 "answer_wrong": answer_wrong, "answer_judge": answer_judge,
+                # ⭐ `2.0-59` 工程层埋点（**只观测**，⛔ 不影响上面任何判定）
+                "timings": {
+                    "retrieve_ms": retrieve_ms,
+                    "ambiguity_ms": ambiguity_ms,
+                    "generate_ms": generate_ms,
+                    "total_ms": retrieve_ms + ambiguity_ms + generate_ms,
+                    # 检索**内部分段**（来自 retriever 的 `trace["timings"]`）
+                    "stages": trace.get("timings") or {},
+                },
+                "tokens": {"ambiguity": amb_usage, "generate": gen_usage},
+                # ⚠️ 评测**不走** redis 答案缓存（那是 `/chat` 的事）→ **如实记 False**，
+                #    不省略字段：省略会让人以为"没测"，而不是"没命中"。
+                "cache_hit": False,
                 "bait_hit": bait_hit}
 
     out = await asyncio.gather(*(one(r) for r in dataset))
     print(f"  [{name}] 完成（模式实际生效值：{mode}）")
     return list(out)
+
+
+def _latency_block(rows: list[dict]) -> dict:
+    """⭐ `2.0-59` 延迟分位（**按协议 §八**：p50/p90/p95/max ＋ **>5s 占比**，⛔ 不只报平均）。
+
+    ⚠️ 分位实现**复用 `eval/l0_report.pct_nearest_rank`** —— ⛔ 不在这里再写一份
+    （`2.0-51` 刚统一过，两份实现必然漂移）。
+    ⚠️ 数字**没有适用范围就没有意义** —— 调用方必须连着「哪套语料 / 哪个库 / 哪个臂」一起读。
+    """
+    def blk(vals: list[float]) -> dict:
+        if not vals:
+            return {"n": 0}
+        v = [int(round(x)) for x in vals]
+        return {
+            "n": len(v),
+            "p50": pct_nearest_rank(v, 50), "p90": pct_nearest_rank(v, 90),
+            "p95": pct_nearest_rank(v, 95), "max": max(v),
+            "gt_5s_ratio": round(sum(1 for x in v if x > 5000) / len(v), 4),
+        }
+
+    out = {k: blk([r["timings"][k] for r in rows if r.get("timings")]) for k in
+           ("retrieve_ms", "ambiguity_ms", "generate_ms", "total_ms")}
+    # 检索**内部分段**（缺字段的题跳过，不拿 0 顶）
+    stages = ("rewrite_ms", "embed_ms", "lexical_ms", "vector_ms", "fuse_ms", "rerank_ms")
+    out["retrieve_stages"] = {
+        s: blk([r["timings"]["stages"][s] for r in rows
+                if r.get("timings") and s in (r["timings"].get("stages") or {})])
+        for s in stages
+    }
+    # ⚠️ `rerank_ms` 在一关重排的臂上≈0 —— 那是**没跑**，不是"跑得快"。
+    #    单列这个标志，免得读的人把 0 当成"精排免费"。
+    out["rerank_ran"] = any(
+        (r.get("timings") or {}).get("stages", {}).get("reranked") for r in rows)
+    out["by_kind"] = {}
+    for kind in sorted({r["kind"] for r in rows}):
+        sub = [r for r in rows if r["kind"] == kind]
+        out["by_kind"][kind] = blk([r["timings"]["total_ms"] for r in sub if r.get("timings")])
+    return out
+
+
+def _tokens_block(rows: list[dict]) -> dict:
+    """⭐ `2.0-59` token 总量。
+
+    ⚠️ **拿不到的记 `None`，不计入总和**（`n_measured` 另记）——
+    ⛔ 把"没拿到"当 0 会让总量**看着更省**，那是假数字。
+    """
+    def total(arm: str) -> tuple[int, int, int]:
+        got = [r["tokens"][arm] for r in rows
+               if r.get("tokens") and (r["tokens"].get(arm) or {}).get("called")]
+        p = sum(x.get("prompt_tokens") or 0 for x in got)
+        c = sum(x.get("completion_tokens") or 0 for x in got)
+        return p, c, len(got)
+
+    out: dict = {}
+    for arm in ("ambiguity", "generate"):
+        p, c, n = total(arm)
+        out[arm] = {"prompt_tokens": p, "completion_tokens": c,
+                    "total_tokens": p + c, "n_measured": n}
+    out["grand_total_tokens"] = out["ambiguity"]["total_tokens"] + out["generate"]["total_tokens"]
+    # ⚠️ 评测**不经过** redis 答案缓存 → **显式记 False**（省略会读成"没测"）
+    out["cache_hit"] = False
+    return out
 
 
 def summarize(rows: list[dict], name: str) -> dict:
@@ -274,6 +369,28 @@ def summarize(rows: list[dict], name: str) -> dict:
     unchecked = [r["id"] for r in rows if r["answer_wrong"] is None]
     if unchecked:
         print(f"    ⚠️ **待人工/LLM 判的题 {len(unchecked)} 道**：{unchecked}")
+
+    # ⭐ `2.0-59` 工程层：延迟分位 ＋ token（**按协议 §八，不许只报平均**）
+    lat = _latency_block(rows)
+    tok = _tokens_block(rows)
+    print(f"\n  延迟分位（ms ｜ 本臂 ｜ 语料见产物 `config`）:")
+    print(f"    {'段':<14}{'n':>4}{'p50':>8}{'p90':>8}{'p95':>8}{'max':>9}{'>5s':>8}")
+    for k in ("retrieve_ms", "ambiguity_ms", "generate_ms", "total_ms"):
+        b = lat[k]
+        if not b.get("n"):
+            continue
+        print(f"    {k:<14}{b['n']:>4}{b['p50']:>8}{b['p90']:>8}{b['p95']:>8}"
+              f"{b['max']:>9}{b['gt_5s_ratio']:>8.1%}")
+    print(f"    — 检索内部分段 （本臂精排：{'✅ 真跑过' if lat['rerank_ran'] else '⛔ 未跑 → rerank_ms≈0 是「没跑」不是「跑得快」'}）—")
+    for k, b in lat["retrieve_stages"].items():
+        if b.get("n"):
+            print(f"    {k:<14}{b['n']:>4}{b['p50']:>8}{b['p90']:>8}{b['p95']:>8}"
+                  f"{b['max']:>9}{b['gt_5s_ratio']:>8.1%}")
+    print(f"\n  token：歧义判定 {tok['ambiguity']['total_tokens']}（n={tok['ambiguity']['n_measured']}）"
+          f" ｜ 生成 {tok['generate']['total_tokens']}（n={tok['generate']['n_measured']}）"
+          f" ｜ **合计 {tok['grand_total_tokens']}**")
+    print("    ⚠️ 拿不到用量的调用**不计入**（`n_measured` 另记）—— 别把「没拿到」当 0")
+
     return {"per_kind": per_kind, "overall": tot,
             "refuse_ok": refused_ok, "refuse_n": len(na),
             "false_refuse": false_ref, "false_n": len(ok),
@@ -285,7 +402,10 @@ def summarize(rows: list[dict], name: str) -> dict:
             "ctx_ok": sum(1 for r in rows if r["ctx_ok"]),
             "answer_wrong": {str(k): v for k, v in
                              Counter(r["answer_wrong"] for r in rows).items()},
-            "answer_unjudged": [r["id"] for r in rows if r["answer_wrong"] is None]}
+            "answer_unjudged": [r["id"] for r in rows if r["answer_wrong"] is None],
+            # ⭐ `2.0-59` 工程层 —— 延迟分位 ＋ token 总量（**按臂**；按题型的在下面）
+            "latency": _latency_block(rows),
+            "tokens": _tokens_block(rows)}
 
 
 async def main() -> int:

@@ -123,10 +123,14 @@ def parse_result(raw: str) -> AmbiguityResult:
     return AmbiguityResult(status=JUDGE_AMBIGUOUS, reason=str(data.get("reason", "")), options=options)
 
 
-async def check_ambiguity(question: str, chunks: list[Chunk]) -> AmbiguityResult:
+async def check_ambiguity(question: str, chunks: list[Chunk],
+                          usage_out: dict | None = None) -> AmbiguityResult:
     """判定候选之间是否存在互相矛盾的答案。返回**三态**（P0-1）。
 
     ⚠️ **"没拿到有效结论"一律 `unknown`，绝不再退化成 `clear`**（旧实现的漏报来源）。
+
+    `usage_out`（⭐ `2.0-59` 埋点）：传了就往里写这一次判定的 **token 用量**。
+    ⛔ **纯观测** —— 不传时行为与返回**一字不变**（生产调用方都不传）。
     """
     settings = get_settings()
     if not settings.ambiguity_check_enabled or len(chunks) < 2:
@@ -158,6 +162,15 @@ async def check_ambiguity(question: str, chunks: list[Chunk]) -> AmbiguityResult
         # 调用异常 → unknown（旧实现返回"无歧义"：一次网络抖动就等于"判定通过"）
         audit_err("ambiguity_check_failed", question=question, error=str(e))
         return AmbiguityResult(status=JUDGE_UNKNOWN, reason=f"判定调用失败：{e}")
+
+    # ⭐ `2.0-59`：**只用观测** —— 调用成功才记（失败/未答也要记，
+    #    否则分位数会把"失败但花了钱"的那几次悄悄丢掉）。⛔ 不影响下面任何判断。
+    if usage_out is not None:
+        usage_out.update({
+            "prompt_tokens": reply.prompt_tokens,
+            "completion_tokens": reply.completion_tokens,
+            "called": True,
+        })
 
     if not reply.answered:
         # 截断 / 空输出。`finish_reason=length` 是推理模型思考吃满的典型表现，

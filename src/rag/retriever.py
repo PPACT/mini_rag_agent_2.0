@@ -1,6 +1,8 @@
 """RAG 检索：多查询扩展 → 向量粗排 → RRF 融合 → 精排(Rerank) → 权限过滤。"""
 from __future__ import annotations
 
+import time
+
 from src.config.settings import get_settings
 from src.embedding.base import get_embedding
 from src.rag.query_rewriter import expand_queries
@@ -85,11 +87,15 @@ async def retrieve(
     recall_k = max(top_k, settings.rerank_candidates) if use_rerank else top_k
 
     queries = [question]
+    t0 = time.perf_counter()
     if use_rewrite:
         queries = await expand_queries(question, settings.query_rewrite_count)
+    ms_rewrite = (time.perf_counter() - t0) * 1000
 
     embedding = get_embedding()
+    t0 = time.perf_counter()
     query_vectors = await embedding.embed(queries)
+    ms_embed = (time.perf_counter() - t0) * 1000
 
     store = get_vector_store(kb)
     filters = AccessFilter(departments=departments, secret_level_le=secret_level)
@@ -99,17 +105,24 @@ async def retrieve(
 
     # 词法侧（混合检索）：兜底"精确词"查询（缩写、编号、型号）
     # 不支持的实现返回空列表，自动退化为纯向量检索
+    ms_lexical = 0.0
     if use_hybrid:
+        t0 = time.perf_counter()
         lexical = await store.search_lexical(question, filters, recall_k)
+        ms_lexical = (time.perf_counter() - t0) * 1000
         if lexical:
             ranked_lists.append(lexical)
 
     # 向量侧（多查询扩展的每一路）
+    ms_vector = 0.0
     for vec in query_vectors:
+        t0 = time.perf_counter()
         lst = await store.search(vec, filters, recall_k)
+        ms_vector += (time.perf_counter() - t0) * 1000
         vector_lists.append(lst)
         ranked_lists.append(lst)
 
+    t0 = time.perf_counter()
     if len(ranked_lists) == 1:
         candidates = ranked_lists[0]
     else:
@@ -126,12 +139,17 @@ async def retrieve(
     for c in candidates:
         if c.id in vec_best:
             c.score = vec_best[c.id]
+    ms_fuse = (time.perf_counter() - t0) * 1000
 
     # 精排：用更强的判断力纠正"语义相近但答非所问"
+    t0 = time.perf_counter()
     if use_rerank and len(candidates) > top_k:
         chunks = await get_reranker(rerank_backend).rerank(question, candidates, top_k)
+        reranked = True
     else:
         chunks = candidates[:top_k]
+        reranked = False
+    ms_rerank = (time.perf_counter() - t0) * 1000
 
     if trace is not None:
         # 暴露中间结果：粗排候选池 vs 精排结果（用于看"精排是否误杀/提权"）
@@ -143,5 +161,15 @@ async def retrieve(
         trace["recall_k"] = recall_k
         trace["candidates"] = candidates          # RRF 融合后的粗排候选池
         trace["final"] = chunks                   # 精排（或截断）后的最终结果
+        # ⭐ `2.0-59` 工程层埋点：**分段耗时**（只观测，⛔ 不改变任何结果）。
+        #    ⚠️ `rerank` 关掉时 `ms_rerank` 只是"截断"那一步（≈0）——**不是 0 成本**，
+        #    读的人要按 `reranked` 判断这一段到底有没有真跑精排。
+        trace["timings"] = {
+            "rewrite_ms": ms_rewrite, "embed_ms": ms_embed,
+            "lexical_ms": ms_lexical, "vector_ms": ms_vector,
+            "fuse_ms": ms_fuse, "rerank_ms": ms_rerank,
+            "reranked": reranked,
+            "total_ms": ms_rewrite + ms_embed + ms_lexical + ms_vector + ms_fuse + ms_rerank,
+        }
 
     return format_context(chunks), chunks
