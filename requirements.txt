@@ -44,3 +44,6 @@ jieba
 # ---- 可观测（占位，需要时取消注释）----
 # opentelemetry-api
 # opentelemetry-sdk
+
+# ---- 演示界面（2.0-54）----
+streamlit
