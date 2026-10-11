@@ -92,6 +92,82 @@ def _cuda_available() -> bool:
         return False
 
 
+# ---------------------------------------------------------------- 送文形态（路由）
+#
+# ⭐ 2026-10-11：**送进精排的文本怎么构造**，比"截断多长"更影响结果。
+#    实测（50 题 · 同一模型）：纯截断 600 要 611ms 才拿到 `R@1` 39 / `AllHit@3` 10；
+#    而**抽核心句 300** 只花 267ms 就拿到 `R@1` 40 / `AllHit@3` 10 ——
+#    ⭐ **同样 300 字预算，按 query 挑句子，装进了原本要 600~1000 字才有的信息。**
+#    ⚠️ 但**只在短文本语料上成立**：年报类长文档上**无效**（CFQA 负向比 11→12），
+#       因为年报的答案大量在**表格/数字**里，抽句规则对表格无效 ⇒ 故有下面的**路由**。
+
+_SENT_SPLIT = re.compile(r"(?<=[。！？；;!?\n])")
+_DIGIT = re.compile(r"\d")
+_WORD2 = re.compile(r"[^\s，。；：、（）%()《》\-—]+")
+
+
+def numeric_density(text: str) -> float:
+    """数字字符占比（%）—— ⭐ 路由信号。
+
+    📌 实测 p50（2026-10-11）：纯文本语料 **9.2%** ｜ 年报（金融）**26.3%**。
+    """
+    if not text:
+        return 0.0
+    return len(_DIGIT.findall(text)) * 100.0 / len(text)
+
+
+def is_numeric_heavy(text: str, threshold: float) -> bool:
+    """数值/表格类？—— ⇒ ⛔ **不抽句**，保留上下文（表格的语义靠**结构**，抽句会打散它）。"""
+    return numeric_density(text) >= threshold
+
+
+def _bigrams(text: str) -> set[str]:
+    t = "".join(_WORD2.findall(text))
+    return {t[i:i + 2] for i in range(len(t) - 1)} if len(t) >= 2 else set()
+
+
+def extract_core_sentences(text: str, query: str, budget: int) -> str:
+    """**抽核心句**：切句 → 按「与 query 的 2-gram 重合 ＋ 首/尾句加分」打分 → 贪心拼到预算。
+
+    ⚠️ **规则故意简单**（⛔ 不引模型、不调 LLM）：它是**送文策略**，不是判别器；
+    复杂化之前先证明简单规则不够。
+    """
+    if len(text) <= budget:
+        return text
+    sents = [s.strip() for s in _SENT_SPLIT.split(text) if s.strip()]
+    if len(sents) <= 1:
+        return text[:budget]
+    q = _bigrams(query)
+    scored = [
+        (len(_bigrams(s) & q) + (1.5 if i == 0 else (1.0 if i == len(sents) - 1 else 0.0)), i, s)
+        for i, s in enumerate(sents)
+    ]
+    scored.sort(key=lambda x: -x[0])
+    picked: list[tuple[int, str]] = []
+    total = 0
+    for _, i, s in scored:
+        if picked and total + len(s) > budget:
+            break
+        picked.append((i, s))
+        total += len(s)
+    picked.sort()
+    return "".join(s for _, s in picked)[:budget]
+
+
+def text_for_rerank(query: str, content: str, budget: int, *,
+                    route: bool, threshold: float) -> str:
+    """⭐ **路由**：决定这一块**以什么形态**送进精排。
+
+    - `route=False`（默认）→ 与历史一致：**直接截断**（⛔ 不改行为，历史产物仍可比）
+    - `route=True` → **数值重的块保留上下文**（方案 A）｜ **纯文本块抽核心句**（方案 B）
+    """
+    if not route:
+        return content[:budget]
+    if is_numeric_heavy(content, threshold):
+        return content[:budget]
+    return extract_core_sentences(content, query, budget)
+
+
 class LocalCrossEncoderReranker(BaseReranker):
     """本地 cross-encoder 精排（默认 bge-reranker-base）。
 
@@ -111,6 +187,9 @@ class LocalCrossEncoderReranker(BaseReranker):
         self._model_name = model_name or s.rerank_local_model
         self._device = device or s.rerank_local_device or ("cuda" if _cuda_available() else "cpu")
         self._snippet = s.rerank_snippet_chars
+        self._dtype = s.rerank_local_dtype
+        self._route = s.rerank_route_enabled
+        self._density = s.rerank_numeric_density
         self._model = None
 
     def _ensure_model(self):
@@ -122,21 +201,29 @@ class LocalCrossEncoderReranker(BaseReranker):
         if self._model is None:
             from sentence_transformers import CrossEncoder
 
+            kw = {}
+            if self._dtype.lower() == "fp16":
+                import torch
+
+                kw["model_kwargs"] = {"torch_dtype": torch.float16}
             try:
                 self._model = CrossEncoder(
-                    self._model_name, device=self._device, local_files_only=True,
+                    self._model_name, device=self._device, local_files_only=True, **kw,
                 )
             except Exception:  # noqa: BLE001
                 # 首次使用：本地无缓存 → 回退在线加载（会触发一次下载）
-                self._model = CrossEncoder(self._model_name, device=self._device)
-            audit("rerank_model_loaded", model=self._model_name, device=self._device)
+                self._model = CrossEncoder(self._model_name, device=self._device, **kw)
+            audit("rerank_model_loaded", model=self._model_name, device=self._device,
+                  dtype=self._dtype or "default")
         return self._model
 
     async def rerank(self, query: str, chunks: list[Chunk], top_n: int) -> list[Chunk]:
         if len(chunks) <= top_n:
             return chunks[:top_n]
         model = self._ensure_model()
-        pairs = [(query, c.content[: self._snippet]) for c in chunks]
+        pairs = [(query, text_for_rerank(query, c.content or "", self._snippet,
+                                         route=self._route, threshold=self._density))
+                 for c in chunks]
         # CrossEncoder.predict 是同步阻塞的 → 丢到线程池，避免卡住事件循环
         scores = await asyncio.to_thread(model.predict, pairs)
         order = sorted(range(len(chunks)), key=lambda i: -float(scores[i]))

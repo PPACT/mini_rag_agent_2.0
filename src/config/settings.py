@@ -4,11 +4,25 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 项目根目录（src/config/settings.py -> 上三级），避免依赖 cwd 漂移
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _default_rerank_model() -> str:
+    """精排模型的解析：**优先 conda 环境里的本地副本**，否则用 HF 模型名。
+
+    ⭐ 依据（用户 2026-10-11 裁）：「**所有环境资源应该在 conda 环境目录里**」。
+    ⛔ **这里不出现任何本机绝对路径** —— 用 `sys.prefix`（当前解释器所属环境的根）
+    相对定位，于是它在**任何机器上**都指向"那个环境自己的 `models/` 目录"，
+    **路径可移植、也不把机器信息写进 tracked 文件**（`R-5`）。
+    """
+    import sys
+
+    local = Path(sys.prefix) / "models" / "bge-reranker-v2-m3"
+    return str(local) if local.is_dir() else "BAAI/bge-reranker-v2-m3"
 
 
 class Settings(BaseSettings):
@@ -118,8 +132,33 @@ class Settings(BaseSettings):
     # 想改用 llm：设 `RERANK_BACKEND=llm`（全局），或在 `/demo` 用**后端选择器逐请求切换**
     # （D11，不改变默认值）。本地模型未下载 / 显存不足时也可显式切 llm。
     rerank_backend: str = "local"
-    rerank_local_model: str = "BAAI/bge-reranker-base"
+    # ⭐ 模型解析：**优先用 conda 环境里的本地副本**（用户 2026-10-11 裁：环境资源放环境里）。
+    # ⛔ **绝不把本机绝对路径写在这里** —— 本文件是 tracked 的，绝对路径 = 机器信息（`R-5`）。
+    # ⇒ 用 `sys.prefix`（**当前环境根**）相对定位：在任何机器上都指向"那个环境自己的
+    #    `models/` 目录"，**路径可移植**；找不到才回落到 HF 模型名。
+    rerank_local_model: str = Field(default_factory=_default_rerank_model)
     rerank_local_device: str = ""      # 空 = 自动（有 CUDA 用 cuda，否则 cpu）
+    # 加载精度："" = 默认（fp32）｜ "fp16" = 半精度。
+    # ⚠️ 这不是可选优化而是**必需**：`bge-reranker-v2-m3` fp32 要 2.27 GB 显存，
+    #    在 8 GB 卡上（Ollama 还占着一份）会打满 → 实测掉进抖动、跑不动；
+    #    **同一份权重按 fp16 加载只占 1.09 GB** ⇒ 装得下（2026-10-11 实测）。
+    rerank_local_dtype: str = "fp16"
+
+    # ⭐ 路由（2026-10-11）：**按块内容的数字密度**决定「送进精排的文本形态」。
+    #
+    #   背景：实测**抽核心句**（按 query 挑句子）在**短文本语料**上有效
+    #   （`AllHit@3` 5→7 / 9→10），但在**年报类长文档**上**无效**（CFQA 负向比 11→12）——
+    #   因为年报的答案大量在**表格/数字**里，抽句规则（按句号切 ＋ 2-gram 重合）**对表格无效**。
+    #
+    #   → 所以按**块自己的数字密度**分流，而不是按"哪个库"：
+    #     · 数字密度 **≥ 阈值** ⇒ 判为「数值/表格类」→ ⛔ **不抽句，保留上下文**
+    #     · 否则 ⇒ 判为「纯文本」→ **抽核心句**
+    #
+    #   📌 阈值依据（2026-10-11 实测 p50）：纯文本语料 **9.2%** ｜ 年报（金融）**26.3%**
+    #   ⚠️ **不用 `raw_table` 判**：PDF 块**永远没有** `raw_table`（`parse_pdf` 不抽表），
+    #      实测 CFQA **0/4848** ⇒ 拿它当信号会**在年报上全判成"非表格"**。
+    rerank_route_enabled: bool = True      # ✅ 2026-10-11 用户裁「按建议走」→ 开
+    rerank_numeric_density: float = 20.0   # 数字密度阈值（%）
 
     # 混合检索（向量 + 全文检索 RRF 融合，兜底"精确词"查询）
     hybrid_search_enabled: bool = True
