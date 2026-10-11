@@ -57,7 +57,17 @@ def parse_pdf(path: str) -> ParsedDoc:
     warnings: list[str] = []
     with pdfplumber.open(path) as pdf:
         for i, page in enumerate(pdf.pages, 1):
-            text = (page.extract_text() or "").strip()
+            # ⚠️ **单页坏掉不能作废整份**（2026-10-10 修）——
+            #    `pdfplumber.utils.clustering.cluster_objects` 在**某些页**上会
+            #    拿 `None` 和 `int` 比大小而抛 `TypeError`（上游 0.11.10 仍未修）。
+            #    实测：某份 307 页的年报里**只有 6 页**（1.95%）踩它，
+            #    而旧行为是**一页抛错 → 整份文档 0 块**。
+            #    ⇒ 逐页兜住 + **记 warning**（与"无文本层"同一条哲学：**不静默跳过**）。
+            try:
+                text = (page.extract_text() or "").strip()
+            except Exception as e:  # noqa: BLE001
+                warnings.append(f"第 {i} 页解析失败（已跳过）：{type(e).__name__}: {e}")
+                continue
             if text:
                 blocks.append(Block(kind="paragraph", text=text, page=i))
             else:
