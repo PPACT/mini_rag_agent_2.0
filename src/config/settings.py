@@ -11,18 +11,36 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _default_rerank_model() -> str:
-    """精排模型的解析：**优先 conda 环境里的本地副本**，否则用 HF 模型名。
+def _env_models_dir() -> Path:
+    """conda 环境下的 `models/` 目录 —— ⭐ **环境资源的唯一落点**（用户 2026-10-11 规则）。
 
-    ⭐ 依据（用户 2026-10-11 裁）：「**所有环境资源应该在 conda 环境目录里**」。
     ⛔ **这里不出现任何本机绝对路径** —— 用 `sys.prefix`（当前解释器所属环境的根）
     相对定位，于是它在**任何机器上**都指向"那个环境自己的 `models/` 目录"，
     **路径可移植、也不把机器信息写进 tracked 文件**（`R-5`）。
     """
     import sys
 
-    local = Path(sys.prefix) / "models" / "bge-reranker-v2-m3"
+    return Path(sys.prefix) / "models"
+
+
+def _default_rerank_model() -> str:
+    """精排模型的解析：**优先 conda 环境里的本地副本**，否则用 HF 模型名。"""
+    local = _env_models_dir() / "bge-reranker-v2-m3"
     return str(local) if local.is_dir() else "BAAI/bge-reranker-v2-m3"
+
+
+def _default_hf_cache() -> str:
+    """**HF 缓存的唯一落点** —— 环境目录下的 `models/hf/hub`（`2.0-62`）。
+
+    ⚠️ **为什么必须显式传**：HF 的默认缓存是 `~/.cache/huggingface`（**C 盘**）——
+    不传参数它就一直落那儿（实测 C 盘那份 ≈1.2 GB）。用户裁「**不设 `HF_HOME`**」⇒
+    只能在**调用处传 `cache_folder`**（`sentence-transformers` 的参数名）。
+
+    ⚠️ **末级必须是 `hub`** —— 这个参数直接当 `cache_dir` 用，**它下面就得是
+    `models--X--Y/` 那层**。实测：指到 `hf/` 会 `OSError: couldn't find them in the
+    cached files`；指到 `hf/hub` 才加载成功（2026-10-12 踩过一次）。
+    """
+    return str(_env_models_dir() / "hf" / "hub")
 
 
 class Settings(BaseSettings):
@@ -137,6 +155,9 @@ class Settings(BaseSettings):
     # ⇒ 用 `sys.prefix`（**当前环境根**）相对定位：在任何机器上都指向"那个环境自己的
     #    `models/` 目录"，**路径可移植**；找不到才回落到 HF 模型名。
     rerank_local_model: str = Field(default_factory=_default_rerank_model)
+    # ⭐ `2.0-62`：HF 缓存的落点 —— 默认**环境目录下的 `models/hf`**（⛔ 不是 C 盘）。
+    #    ⚠️ 只对"**需要下载/按模型名查找**"的路径有意义；本地目录模型（如 v2-m3）不受它影响。
+    hf_cache_dir: str = Field(default_factory=_default_hf_cache)
     rerank_local_device: str = ""      # 空 = 自动（有 CUDA 用 cuda，否则 cpu）
     # 加载精度："" = 默认（fp32）｜ "fp16" = 半精度。
     # ⚠️ 这不是可选优化而是**必需**：`bge-reranker-v2-m3` fp32 要 2.27 GB 显存，

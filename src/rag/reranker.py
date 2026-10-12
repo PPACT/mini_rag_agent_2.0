@@ -188,6 +188,8 @@ class LocalCrossEncoderReranker(BaseReranker):
         self._device = device or s.rerank_local_device or ("cuda" if _cuda_available() else "cpu")
         self._snippet = s.rerank_snippet_chars
         self._dtype = s.rerank_local_dtype
+        # ⭐ `2.0-62`：HF 缓存落点（环境目录）—— ⛔ 不传就一直落 C 盘用户目录
+        self._cache = s.hf_cache_dir
         self._route = s.rerank_route_enabled
         self._density = s.rerank_numeric_density
         self._model = None
@@ -208,11 +210,13 @@ class LocalCrossEncoderReranker(BaseReranker):
                 kw["model_kwargs"] = {"torch_dtype": torch.float16}
             try:
                 self._model = CrossEncoder(
-                    self._model_name, device=self._device, local_files_only=True, **kw,
+                    self._model_name, device=self._device, cache_folder=self._cache,
+                    local_files_only=True, **kw,
                 )
             except Exception:  # noqa: BLE001
                 # 首次使用：本地无缓存 → 回退在线加载（会触发一次下载）
-                self._model = CrossEncoder(self._model_name, device=self._device, **kw)
+                self._model = CrossEncoder(self._model_name, device=self._device,
+                                           cache_folder=self._cache, **kw)
             audit("rerank_model_loaded", model=self._model_name, device=self._device,
                   dtype=self._dtype or "default")
         return self._model
