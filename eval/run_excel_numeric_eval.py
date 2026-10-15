@@ -31,6 +31,10 @@
 用法（需先 `python eval/ingest.py` 灌语料 + Docker/Ollama 在跑）：
     python eval/run_excel_numeric_eval.py
     python eval/run_excel_numeric_eval.py --modes 全开(生产) --top 10
+
+⚠️ **评测集不入公开仓库**：题面与 `answer_spans` 都抄自私有语料 ⇒ 它放在 **`eval/local/`**
+（`.gitignore` 已按目录规则忽略，与 `dataset_pdf_numeric.jsonl` / `dataset_layered_50q.jsonl` 同待遇）。
+**本地跑**：先确认 `eval/local/dataset_excel_numeric.jsonl` 在（⛔ 缺失时**显式报错**，不静默空跑）。
 """
 from __future__ import annotations
 
@@ -52,16 +56,16 @@ from src.document_parser.routing import parse_document  # noqa: E402
 from src.rag.retriever import retrieve  # noqa: E402
 from src.vector_store.base import Chunk  # noqa: E402
 
-DATASET = Path(__file__).resolve().parent / "dataset_excel_numeric.jsonl"
+DATASET = Path(__file__).resolve().parent / "local" / "dataset_excel_numeric.jsonl"
 CORPUS = CORPUS_DIR
 EVAL_DEPARTMENT = ["IT", "公司"]
 EVAL_SECRET_LEVEL = 3
 KS = (1, 3, 5)
 CONCURRENCY = 5
 
-XLSX = ("06_供应商准入与评审标准", "11_客户服务响应标准SLA", "12_固定资产管理办法",
-        "16_2025年度培训计划", "18_IT资产台账_2025Q3", "20_公司简介与组织架构",
-        "21_费用预算明细_2025")
+# ⚠️ **从语料目录现扫，⛔ 不写死文件名**（原先写死了 7 个语料文件名）：
+# ① 写死 = 把私有语料文件名带进公开仓库；② 它**必然与语料目录漂移**（「同一事实只留一个来源」）。
+XLSX = tuple(sorted(p.stem for p in CORPUS.glob("*.xlsx")))
 
 MODES: list[tuple[str, dict]] = [
     ("基线", {"use_rewrite": False, "use_rerank": False, "use_hybrid": False}),
@@ -73,12 +77,20 @@ DEFAULT_MODES = "基线"
 
 
 def load_dataset(path: Path) -> list[dict]:
+    if not path.exists():
+        # ⛔ 不静默空跑：空集会让 ③ 那栏变成"看着有数、其实没测"
+        raise SystemExit(
+            f"[X] 找不到评测集：{path}\n"
+            "    ⚠️ 它**不入公开仓库**（题面 / answer_spans 抄自私有语料，见 `eval/README.md`）"
+            "—— 请从本地留存处补回。")
     return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
 
 def block_lengths() -> tuple[list[dict], list[int]]:
     """①② 逐文件块长（**只用表格块**）+ 汇总原始长度。纯 CPU，不需要 DB。"""
     s = get_settings()
+    if not XLSX:
+        raise SystemExit(f"[X] 语料目录里没扫到 .xlsx：{CORPUS}（先确认语料在不在）")
     rows, allv = [], []
     for name in XLSX:
         doc = parse_document(str(CORPUS / f"{name}.xlsx"))
