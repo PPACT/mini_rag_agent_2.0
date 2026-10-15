@@ -20,8 +20,9 @@
 所以**不必付 30 次嵌入的代价**去复现它（真要复现整条 ingest 再说）。
 
 用法：
-    python eval/diag_pdf_flake.py                      # 默认 30 次
-    python eval/diag_pdf_flake.py --runs 50 --file docs/local/corpus/03_考勤与休假管理规定.pdf
+    # ⚠️ `--file` **必填**（⛔ 不设默认值 —— 默认值等于把一份语料文件名写死在公开树里）
+    python eval/diag_pdf_flake.py --file <语料 PDF 路径>              # 默认 30 次
+    python eval/diag_pdf_flake.py --runs 50 --file <语料 PDF 路径>
 """
 from __future__ import annotations
 
@@ -38,8 +39,6 @@ sys.path.insert(0, str(ROOT))
 from eval.paths import CORPUS_DIR  # noqa: E402
 
 from src.document_parser.routing import parse_document  # noqa: E402
-
-DEFAULT_FILE = CORPUS_DIR / "03_考勤与休假管理规定.pdf"
 
 
 def _signature(exc: BaseException) -> str:
@@ -82,7 +81,8 @@ def _run_in_fresh_process(path: Path) -> tuple[bool, str | None]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=int, default=30)
-    ap.add_argument("--file", default=str(DEFAULT_FILE))
+    ap.add_argument("--file", required=True,
+                    help="要复现的那份 PDF（**显式传**语料路径 —— ⛔ 不设默认值）")
     ap.add_argument("--json", default=str(ROOT / "logs" / "diag_pdf_flake.json"))
     ap.add_argument("--fresh-procs", type=int, default=10,
                     help="额外用**新进程**跑几次（分辨进程内状态影响）")
@@ -122,11 +122,13 @@ def main() -> int:
 
     fresh = [_run_in_fresh_process(path) for _ in range(args.fresh_procs)]
     nf = sum(1 for ok, _ in fresh if not ok)
-    print(f"\n【新进程】失败 {nf}/{args.fresh_procs} = {nf / args.fresh_procs * 100:.1f}%")
-    if nf:
-        for _, msg in fresh:
-            if msg:
-                print(f"    {msg}")
+    # ⚠️ `--fresh-procs 0` = **不跑这一组**（⛔ 它不能当分母 —— 曾直接 ZeroDivisionError）
+    if args.fresh_procs:
+        print(f"\n【新进程】失败 {nf}/{args.fresh_procs} = {nf / args.fresh_procs * 100:.1f}%")
+        if nf:
+            for _, msg in fresh:
+                if msg:
+                    print(f"    {msg}")
 
     # ---- 整批模式：贴近真实的 ingest（顺序解析一整批，进程内状态会累积）----
     corpus_fail: Counter[str] = Counter()

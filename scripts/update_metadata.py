@@ -27,7 +27,7 @@ chunks    可改：department / secret_level / title / is_deprecated
     # 先看要改成什么（不改库）
     python scripts/update_metadata.py --kb stress --doc-id <uuid> --set department=HR --dry-run
     # 按文件名定位（重名会报错，不猜）
-    python scripts/update_metadata.py --kb stress --filename 13_绩效考核实施指引.txt --set secret_level=2
+    python scripts/update_metadata.py --kb stress --filename <语料文件名> --set secret_level=2
     # 文档级的（content_status 在 documents 上）
     python scripts/update_metadata.py --kb stress --doc-id <uuid> --doc-set content_status=stale
 """

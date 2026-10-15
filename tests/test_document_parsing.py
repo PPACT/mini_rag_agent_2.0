@@ -381,7 +381,7 @@ def test_markdown_code_fence_is_a_code_block(tmp_path):
 def test_code_file_becomes_one_code_block(tmp_path):
     """**回归**：代码文件必须产出**整块** `code` 块。
 
-    以前 `.py` 走"按空行分段" → 实测 `23_edge_collector.py` 被切成 **20 块**，
+    以前 `.py` 走"按空行分段" → 实测语料里那份 `.py` 被切成 **20 块**，
     而 `chunking` 的「代码整块」策略只对 `kind == "code"` 生效 →
     **那条策略对代码文件从未生效**（声明了、却没作用）。
     """
