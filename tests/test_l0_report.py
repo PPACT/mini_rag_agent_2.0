@@ -64,9 +64,13 @@ def test_l0_report_survives_a_broken_file(tmp_path):
     """⚠️ **一个坏文件不该中断整批** —— 它要进"失败清单"，其余照常体检。
 
     （对照 `eval/ingest.py` 曾经"一篇坏就中断整批"那个坑。）
+
+    ⚠️ 2026-10-15：本用例原来拿 `c.html` 当"不支持的格式"，而 **`2.0-40` 接入 HTML 后
+    它已经能解析了** ⇒ 换成 `.doc`（旧版二进制，**路由表里明确拒收、且短期内不会变**）。
     """
     corpus = _make_corpus(tmp_path)
-    (corpus / "c.html").write_text("<html><body>x</body></html>", encoding="utf-8")
+    # OLE2 文件头 = 旧版 .doc：路由认得这个格式、但我们没有解析器 → 明确拒收
+    (corpus / "c.doc").write_bytes(b"\xd0\xcf\x11\xe0" + b"\x00" * 20)
     out = tmp_path / "l0.json"
     r = subprocess.run(
         [sys.executable, str(SCRIPT), "--dir", str(corpus), "--json", str(out)],
@@ -77,8 +81,8 @@ def test_l0_report_survives_a_broken_file(tmp_path):
     s = json.loads(out.read_text(encoding="utf-8"))["summary"]
     assert s["ok"] == 2 and s["failed"] == 1, f"应 2 成功 / 1 失败，实际 {s}"
     detail = json.loads(out.read_text(encoding="utf-8"))["files_detail"]
-    # 失败**原因**要可读（不是一句"失败了"）
-    assert any("HTML" in (f.get("error") or "") for f in detail), "失败原因要可读"
+    # 失败**原因**要可读（不是一句"失败了"）—— 而且要是**路由层给的那句**
+    assert any("旧版二进制" in (f.get("error") or "") for f in detail), "失败原因要可读"
 
 
 def test_l0_report_rejects_a_missing_dir(tmp_path):

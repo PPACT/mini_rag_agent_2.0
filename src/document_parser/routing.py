@@ -5,8 +5,8 @@
 ⭐ **两条贯穿本模块的原则**
 
 1. **只登记真正实现的解析器**。
-   规划表 §2.2 的"首选"里列了 PyMuPDF / PaddleOCR / trafilatura / tree-sitter —— 本项目
-   **都没装**。把它们写进链子，就会让路由"看起来有兜底、其实没有"，
+   规划表 §2.2 的"首选"里列了 PyMuPDF / PaddleOCR / tree-sitter —— 本项目**都没装**
+   （`trafilatura` 已于 2026-10-15 接入，见 `html` 那条链）。把它们写进链子，就会让路由"看起来有兜底、其实没有"，
    而失败时链条会一路走空、最后报一个看不懂的错。**没有比"假装有"更贵的了。**
 2. **每一层都要有兜底，且兜底必须留下痕迹**。
    后缀撒谎 → MIME → magic number → 纯文本；
@@ -24,6 +24,7 @@ from src.document_parser.blocks import ParsedDoc
 from src.document_parser.parsers import (
     parse_csv,
     parse_docx,
+    parse_html,
     parse_pdf,
     parse_plain,
     parse_pptx,
@@ -68,6 +69,7 @@ _PARSER_FUNCS: dict[str, Callable[[str], ParsedDoc]] = {
     "python-pptx": parse_pptx,
     "csv": parse_csv,
     "plain": parse_plain,
+    "trafilatura": parse_html,
 }
 
 # 类型 → 解析器链（首选 → 备选 → 降级），**全部是已实现的**。
@@ -77,6 +79,7 @@ _CHAINS: dict[str, tuple[str, ...]] = {
     "xlsx": ("openpyxl",),
     "pptx": ("python-pptx",),
     "csv": ("csv",),
+    "html": ("trafilatura",),
     "markdown": ("plain",),
     "text": ("plain",),
     "code": ("plain",),
@@ -86,6 +89,7 @@ _CHAINS: dict[str, tuple[str, ...]] = {
 _EXT_KIND: dict[str, str] = {
     "pdf": "pdf", "docx": "docx", "xlsx": "xlsx", "xlsm": "xlsx", "xls": "xlsx",
     "csv": "csv", "pptx": "pptx", "md": "markdown", "markdown": "markdown",
+    "html": "html", "htm": "html",
     "txt": "text", "log": "text",
     "py": "code", "js": "code", "ts": "code", "java": "code", "go": "code",
     "rs": "code", "c": "code", "h": "code", "cpp": "code", "cs": "code",
@@ -95,11 +99,10 @@ _EXT_KIND: dict[str, str] = {
 
 # ⚠️ 后缀**认得**、但本轮**不实现** → 显式拒收并给出原因。
 #    与"认不出来"是两回事：前者说明我们评估过、明确不做；后者才是意外。
+#    📌 `html` / `htm` 于 2026-10-15 从本表**移出**（`2.0-40` 已接入 `trafilatura`）。
 _KNOWN_UNSUPPORTED: dict[str, str] = {
     "doc": "旧版二进制 .doc —— python-docx 读不了，需先转成 .docx（LibreOffice 可转）",
     "ppt": "旧版二进制 .ppt —— python-pptx 读不了，需先转成 .pptx",
-    "html": "HTML —— 需 trafilatura / beautifulsoup4 提取正文（本项目未接入）",
-    "htm": "HTML —— 同 .html",
     "rtf": "RTF —— 无解析器",
     "odt": "ODT —— 无解析器（可先用 LibreOffice 转 .docx）",
     "epub": "EPUB —— 无解析器",
@@ -114,7 +117,13 @@ _MAGIC: tuple[tuple[bytes, str], ...] = (
     (b"PK\x03\x04", "_zip"),          # Office 三兄弟都是 zip，需再看内部结构
     (b"{\\rtf", "rtf"),
     (b"\xd0\xcf\x11\xe0", "doc"),     # 旧版 Office 复合文档（OLE2）
+    (b"<html", "html"), (b"<!DOCTYPE html", "html"), (b"<!doctype html", "html"),
 )
+
+# ⚠️ **必须 ≥ 最长的 magic**（现在最长的是 `<!DOCTYPE html` = 14 字节）。
+#    这个常量原先写死 8 —— 而 `head.startswith(b"<!DOCTYPE html")` 在 8 字节的头里
+#    **永远为假** ⇒ 那两条 DOCTYPE 判据**从来没生效过**（2026-10-15 补 HTML 时测出来的）。
+_HEAD_BYTES = 16
 
 # zip 内部目录名 → 类型
 _ZIP_MARKERS: tuple[tuple[str, str], ...] = (
@@ -162,14 +171,12 @@ def _kind_by_magic(path: str) -> str | None:
     """按文件头字节判断类型（后缀不可信时用）。"""
     try:
         with open(path, "rb") as f:
-            head = f.read(8)
+            head = f.read(_HEAD_BYTES)
     except OSError:
         return None
     for magic, kind in _MAGIC:
         if head.startswith(magic):
             return kind
-    if head.startswith((b"<html", b"<!DOCTYPE html", b"<!doctype html")):
-        return "html"
     return None
 
 

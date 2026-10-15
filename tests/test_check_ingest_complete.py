@@ -35,3 +35,21 @@ def test_detects_an_extra_document():
 def test_both_directions_at_once():
     r = compare({"a.pdf", "b.pdf"}, {"b.pdf", "z.pdf"})
     assert r == {"missing": ["a.pdf"], "unexpected": ["z.pdf"]}
+
+
+def test_html_counts_as_known_not_unsupported(tmp_path):
+    """⭐ `2.0-40` 接入后，`.html` 必须落进「**认得的**」那一侧。
+
+    ⚠️ 这条**正是这个闸的开关**：只要 HTML 还在"明确拒收"那侧，语料里那份 `.html`
+    就被当作**预期跳过**，闸会一直报"完整"—— 而它其实**从来没进过库**
+    （"永远绿和永远红一样没用"）。
+    """
+    from eval.check_ingest_complete import split_by_routing
+
+    (tmp_path / "a.html").write_text(
+        "<!doctype html><html><body><p>正文</p></body></html>", encoding="utf-8")
+    (tmp_path / "a.doc").write_bytes(b"\xd0\xcf\x11\xe0" + b"\x00" * 20)   # OLE2 头
+
+    known, unsupported = split_by_routing([tmp_path / "a.html", tmp_path / "a.doc"])
+    assert known == {"a.html"}, f"HTML 应算「认得的」：{known}"
+    assert unsupported == {"a.doc"}, "旧版二进制 .doc 仍应明确拒收（别顺手一起放进来）"

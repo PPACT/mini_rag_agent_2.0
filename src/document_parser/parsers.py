@@ -317,39 +317,14 @@ def _read_text(path: str) -> tuple[str, str]:
         return str(best), str(best.encoding)
 
 
-def parse_plain(path: str) -> ParsedDoc:
-    """Markdown / 纯文本 / **代码**。按空行分段；认得 `#` 标题与 ``` 代码围栏。
+def _segment_markdown(text: str, *, is_md: bool) -> tuple[list[Block], list[str]]:
+    """Markdown / 纯文本 → blocks：**标题 / 代码围栏 / 段落**。
 
-    ⚠️ **代码文件整块产出**（`2.0-24` 前半）：
-    以前 `.py` 走的是"按空行分段"→ 实测 `23_edge_collector.py` 被切成 **20 块**，
-    而 `chunking` 的「**代码整块**」策略只对 `kind == "code"` 生效 →
-    **那条策略对代码文件从未生效**。现在 `.py` 直接产**一个 `code` 块**。
-
-    ⚠️ **本轮不做 tree-sitter 按函数/类切**（那是 `2.0-24` 后半）——
-    **留位置**：整块切会产出一个超长块（`23_...py` 约 250 行），
-    正是将来与"按函数/类切"对比的**基线**。
+    ⚠️ **全项目只有这一份分段实现**。HTML（`parse_html`）从 `trafilatura` 拿到的也是
+    Markdown → 再抄一遍分段逻辑，两份必然漂移（"同一事实只留一个来源"，本项目已栽两次）。
     """
-    text, enc = _read_text(path)
-    is_md = path.lower().endswith((".md", ".markdown"))
     blocks: list[Block] = []
     warnings: list[str] = []
-    if enc != "utf-8":
-        warnings.append(f"编码不是 UTF-8（实测 {enc}），已转码")
-
-    # 代码文件 → 整块（**延迟导入**避免与 routing 循环 import）
-    from src.document_parser.routing import kind_by_extension
-
-    ext = path.lower().rsplit(".", 1)[-1]
-    if kind_by_extension(ext) == "code":
-        body = text.strip()
-        if not body:
-            return ParsedDoc(blocks=[], parser="plain", warnings=[*warnings, "代码文件为空"])
-        return ParsedDoc(
-            blocks=[Block(kind="code", text=body, meta={"lang": ext})],
-            parser="plain",
-            warnings=warnings,
-        )
-
     buf: list[str] = []
     in_code = False
     code_buf: list[str] = []
@@ -382,5 +357,84 @@ def parse_plain(path: str) -> ParsedDoc:
     if code_buf:  # 围栏未闭合 —— 不丢内容，但要说一声
         blocks.append(Block(kind="code", text="\n".join(code_buf).strip()))
         warnings.append("代码围栏未闭合，已按普通代码块收尾")
-    blocks = [b for b in blocks if b.text]
-    return ParsedDoc(blocks=blocks, parser="plain", warnings=warnings)
+    return [b for b in blocks if b.text], warnings
+
+
+def parse_plain(path: str) -> ParsedDoc:
+    """Markdown / 纯文本 / **代码**。按空行分段；认得 `#` 标题与 ``` 代码围栏。
+
+    ⚠️ **代码文件整块产出**（`2.0-24` 前半）：
+    以前 `.py` 走的是"按空行分段"→ 实测 `23_edge_collector.py` 被切成 **20 块**，
+    而 `chunking` 的「**代码整块**」策略只对 `kind == "code"` 生效 →
+    **那条策略对代码文件从未生效**。现在 `.py` 直接产**一个 `code` 块**。
+
+    ⚠️ **本轮不做 tree-sitter 按函数/类切**（那是 `2.0-24` 后半）——
+    **留位置**：整块切会产出一个超长块（`23_...py` 约 250 行），
+    正是将来与"按函数/类切"对比的**基线**。
+    """
+    text, enc = _read_text(path)
+    warnings: list[str] = []
+    if enc != "utf-8":
+        warnings.append(f"编码不是 UTF-8（实测 {enc}），已转码")
+
+    # 代码文件 → 整块（**延迟导入**避免与 routing 循环 import）
+    from src.document_parser.routing import kind_by_extension
+
+    ext = path.lower().rsplit(".", 1)[-1]
+    if kind_by_extension(ext) == "code":
+        body = text.strip()
+        if not body:
+            return ParsedDoc(blocks=[], parser="plain", warnings=[*warnings, "代码文件为空"])
+        return ParsedDoc(
+            blocks=[Block(kind="code", text=body, meta={"lang": ext})],
+            parser="plain",
+            warnings=warnings,
+        )
+
+    blocks, seg_warnings = _segment_markdown(
+        text, is_md=path.lower().endswith((".md", ".markdown")))
+    return ParsedDoc(blocks=blocks, parser="plain", warnings=[*warnings, *seg_warnings])
+
+
+# ---------------------------------------------------------------- HTML（2.0-40）
+
+
+def parse_html(path: str) -> ParsedDoc:
+    """HTML（`trafilatura`）—— **提取正文**，去导航 / 去广告 / 去评论区是它的本职。
+
+    📌 **本单口径**（`2.0-40` 取路 A）：**只解决"页面进得来"**，
+    ⛔ **不等于"清洗做完了"**（`CLN-*` 规则族归 `2.0-5`，另议）。
+
+    ⚠️ **参数是实测选的，不是抄默认值**（实测详见 `交流区 §1.126`）：
+    - `favor_precision=True` —— **唯一真能去掉导航的档位**：同一条 `<div class=nav>`
+      在 默认 / `favor_recall` / `include_formatting` 下**全部漏进正文**，只有它不漏；
+      且"纯导航页"在它下面**提取不出正文**（⇒ 显式失败，见下）。
+    - 🔴 **它的代价（如实记，⛔ 不假装没有）**：**扁平 HTML**（`<body>` 里直接放
+      `<h1>/<h2>/<p>`，没有 `<article>`/`<main>` 包裹）会**连章节标题一起剪掉**
+      —— 本项目语料里那份「转换型 HTML」正是这种（见 `2.0-63`）。
+      **正文段落不丢**，丢的是标题。
+    - ⛔ **不加"给扁平文档包一层 `<article>`"这类补救**：实测它会**把导航放回正文**
+      （主区一旦判定成立，精度剪枝就不再作用于页头）⇒ 那是**拿验收③换标题**。
+    - `include_comments=False`（评论区不是正文）｜ `include_tables=True`
+      —— 表格交给路由层的 `recover_tables()` 重建，**与 Markdown 同一条路**。
+    - 解析器**延迟导入**：只有真要解析 HTML 时才付它的导入开销（冷启动不受影响）。
+    """
+    import trafilatura
+
+    text, enc = _read_text(path)
+    extracted = trafilatura.extract(
+        text, output_format="markdown", include_comments=False,
+        include_tables=True, favor_precision=True,
+    )
+    if not extracted:
+        # ⚠️ 返回 None = **它判不出正文**（纯导航页 / 列表页就是这样）。
+        # 这里**显式失败**：⛔ 不静默产出空文档 —— 那会变成"入库成功、块数 0"，
+        # 而 `check_ingest_complete` 正是靠"块数为 0"这一列抓这种事的。
+        raise ValueError("提取不出正文（页面可能只有导航 / 列表，没有正文区）")
+    blocks, seg_warnings = _segment_markdown(extracted, is_md=True)
+    if not blocks:
+        raise ValueError("正文提取成功，但分段后没有任何内容")
+    warnings = list(seg_warnings)
+    if enc != "utf-8":
+        warnings.append(f"编码不是 UTF-8（实测 {enc}），已转码")
+    return ParsedDoc(blocks=blocks, parser="trafilatura", warnings=warnings)

@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from src.document_parser.loader import load_document, load_text
@@ -419,3 +421,126 @@ def test_same_content_in_txt_is_not_a_code_block(tmp_path):
     # 断言抓**语义**（"不该有 code 块"），不数它切成几段 ——
     # 段数取决于按空行切的实现细节，写死会把无关改动弄红（今天第二次踩这个）
     assert "code" not in load_document(str(p)).kind_counts()
+
+
+# ---------------------------------------------------------------- HTML（2.0-40 / 提醒 #24）
+
+
+REIMBURSE_NAV = ["首页", "产品中心", "解决方案", "新闻动态", "关于我们", "联系方式"]
+
+NAV_PAGE_HTML = """<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>纯导航页</title></head>
+<body>
+<div id="header"><ul class="menu">
+<li><a href="/a">首页</a></li><li><a href="/b">产品中心</a></li>
+<li><a href="/c">解决方案</a></li><li><a href="/d">新闻动态</a></li>
+<li><a href="/e">关于我们</a></li><li><a href="/f">联系方式</a></li>
+</ul></div>
+</body></html>"""
+
+# 导航 + 正文：正文里**刻意不含**任何导航词，这样"串没串进来"才判得准
+ARTICLE_PAGE_HTML = """<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>差旅报销标准</title></head>
+<body>
+<div id="header"><ul class="menu">
+<li><a href="/a">首页</a></li><li><a href="/b">产品中心</a></li>
+<li><a href="/c">解决方案</a></li><li><a href="/d">新闻动态</a></li>
+<li><a href="/e">关于我们</a></li><li><a href="/f">联系方式</a></li>
+</ul></div>
+<article><h1>差旅报销标准</h1>
+<p>住宿费按城市分级：一线城市每人每晚不超过 500 元，二线城市不超过 400 元。</p>
+<p>市内交通费每人每天不超过 80 元，凭票实报实销。</p></article>
+<div id="footer"><p>版权所有 · 京ICP备00000000号</p></div>
+</body></html>"""
+
+
+def _write_html(path, html: str):
+    path.write_text(html, encoding="utf-8")
+    return path
+
+
+def _naive_text(html: str) -> str:
+    """对照臂：**不做正文提取**、只把标签去掉，能拿到什么。
+
+    ⚠️ 没有它，"导航没进来"这条断言**证明不了任何事** —— 万一面里本来就没有导航词呢？
+    """
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
+
+
+def test_html_routes_to_trafilatura(tmp_path):
+    """`2.0-40` 接入后，`.html` / `.htm` **不再**是"格式认得但不做"。"""
+    for name in ("a.html", "a.htm"):
+        plan = route_file(str(_write_html(tmp_path / name, NAV_PAGE_HTML)))
+        assert plan.kind == "html"
+        assert plan.chain == ("trafilatura",)
+        assert "html" in supported_extensions() and "htm" in supported_extensions()
+
+
+def test_html_by_magic_when_extension_lies(tmp_path):
+    """后缀撒谎成 `.txt`，内容却是 HTML → **magic 认得出**（2.0-2 的兜底照旧生效）。"""
+    p = tmp_path / "fake.txt"
+    p.write_text("<!DOCTYPE html><html><body><p>你好</p></body></html>", encoding="utf-8")
+    plan = route_file(str(p))
+    assert plan.kind == "html"
+    assert any(s.startswith("magic.") for s in plan.signals)
+
+
+def test_article_html_keeps_body_and_drops_navigation(tmp_path):
+    """⭐ 验收③ 主用例：**正文进得来、导航进不来**。"""
+    doc = parse_document(str(_write_html(tmp_path / "news.html", ARTICLE_PAGE_HTML)))
+    text = doc.text
+    assert doc.parser == "trafilatura"
+    assert "住宿费" in text and "500" in text, "正文没进来"
+    assert "差旅报销标准" in text, "标题没进来"
+    for item in REIMBURSE_NAV:
+        assert item not in text, f"导航项「{item}」被当成正文了｜正文：{text[:120]}"
+    # ⭐ 区分度：同一份面**朴素去标签**是拿得到导航的 —— 所以上面那条断言不是摆设
+    assert "产品中心" in _naive_text(ARTICLE_PAGE_HTML)
+
+
+def test_article_html_headings_become_heading_blocks(tmp_path):
+    """`<h1>` → `heading` 块（切块的**章节递归切**与 chunk `title` 都靠它）。
+
+    ⚠️ 断言抓**语义**（"标题是 heading 类"），不数块数 —— 段数属实现细节。
+    """
+    doc = parse_document(str(_write_html(tmp_path / "news.html", ARTICLE_PAGE_HTML)))
+    headings = [b.text for b in doc.blocks if b.kind == "heading"]
+    assert "差旅报销标准" in headings
+
+
+def test_pure_navigation_page_is_not_ingested(tmp_path):
+    """⭐ 验收③ 反向用例：**纯导航页** → 显式失败，⛔ **不能把导航当正文收进来**。"""
+    p = _write_html(tmp_path / "nav.html", NAV_PAGE_HTML)
+    with pytest.raises(ParseFailedError) as ei:
+        parse_document(str(p))
+    # 失败必须说清"试过谁、为什么"（2.0-3 的口径）
+    assert "trafilatura" in str(ei.value.detail["attempts"])
+    assert ei.value.path.endswith("nav.html")
+    # ⭐ 区分度：**不做正文提取**的话，这 6 个导航项全都在 —— 所以这不是"永远绿"
+    naive = _naive_text(NAV_PAGE_HTML)
+    assert all(item in naive for item in REIMBURSE_NAV)
+
+
+def test_html_without_body_fails_loudly_not_silently(tmp_path):
+    """反向：**空页面** → 抛错，⛔ 不返回"成功但 0 块"（那会变成"入库成功、块数 0"）。"""
+    p = _write_html(tmp_path / "blank.html", "<html><body></body></html>")
+    with pytest.raises(ParseFailedError):
+        parse_document(str(p))
+
+
+def test_flat_html_loses_section_headings(tmp_path):
+    """⚠️ **如实记录的已知局限**（⛔ 不是在庆祝它）：
+
+    扁平 HTML（`<body>` 里直接放 `<h1>/<h2>/<p>`，无 `<article>`/`<main>`）在
+    `favor_precision` 下**章节标题会被剪掉**（本项目语料那份"转换型 HTML"实测如此，见 `2.0-63`）。
+    正文段落**不丢**。
+
+    📌 这条测试的作用是**当金丝雀**：将来换参数 / 升 trafilatura，行为一变它就红 ——
+    那时要重测，因为它可能变好，**也可能把导航放回来**（实测：给扁平文档包一层
+    `<article>` 能救回标题，但导航会跟着进来）。
+    """
+    flat = ("<!doctype html><html><body><h1>机房巡检须知</h1>"
+            "<h2>一、巡检频次</h2><p>机房每两周巡检一次，由运维值班人员执行。</p></body></html>")
+    doc = parse_document(str(_write_html(tmp_path / "flat.html", flat)))
+    assert "机房每两周巡检一次" in doc.text, "正文不该丢"
+    assert "heading" not in doc.kind_counts(), "行为变了 —— 请重测（见 docstring）"
