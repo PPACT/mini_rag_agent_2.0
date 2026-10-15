@@ -238,7 +238,7 @@ docs/                 开发文档
 
 | 后端 | 配置 | 特点 |
 |---|---|---|
-| `local`（**默认**） | `RERANK_BACKEND=local` | 本地 cross-encoder（`BAAI/bge-reranker-base`）：输出确定、无网络依赖、延迟可预期、零 API 成本 |
+| `local`（**默认**） | `RERANK_BACKEND=local` | 本地 cross-encoder（`BAAI/bge-reranker-v2-m3`，fp16 加载）：输出确定、无网络依赖、延迟可预期、零 API 成本 |
 | `llm` | `RERANK_BACKEND=llm` | 走云端大模型（统一经 `src/config/litellm_client.py` 收口）：省本地模型，但受网络与限流影响 |
 
 > **两个后端都可用，取舍取决于你的场景** —— 本地模型是否已下载 / 能否接受云端依赖 /
@@ -334,7 +334,7 @@ RERANK_BACKEND=llm PYTHONIOENCODING=utf-8 python -m uvicorn src.main:app
 
 ### 四、支持的格式
 
-- **支持**：PDF / Word(`.docx`) / Excel / PPT(`.pptx`) / Markdown / txt / 代码
+- **支持**：PDF / Word(`.docx`) / Excel / PPT(`.pptx`) / Markdown / txt / 代码 / HTML(`.html` / `.htm`)
 - **不支持**：其余格式（含 `.doc` / `.ppt` 老格式）→ **报错并给出原因**
 - **扫描件**：暂时只**标记「待 OCR」**，不识别
 
