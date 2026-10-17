@@ -1,6 +1,6 @@
 """`2.0-7` 分层评估集（50 题）—— **两轮：纯向量 / 混合检索+重排**。
 
-口径见 `docs/local/eval_draft/layered_eval_design.md`（题面在同目录 `layered_eval_50q.md`）。
+口径见 `docs/local/eval_spec/layered_eval_design.md`（题面在同目录 `layered_eval_50q.md`）。
 
 ## 它回答什么（设计文档 §一）
 
@@ -117,7 +117,7 @@ def load_dataset() -> list[dict]:
         raise SystemExit(
             f"❌ 找不到评测集：{DATASET}\n"
             "   它**不入库**（题面/anchor/答案是语料派生，协议 §12.5）——\n"
-            "   请从 docs/local/eval_draft/layered_eval_50q.md 重建到 eval/local/。")
+            "   请从 docs/local/eval_spec/layered_eval_50q.md 重建到 eval/local/。")
     rows = [json.loads(ln) for ln in DATASET.read_text(encoding="utf-8").splitlines() if ln.strip()]
     assert len(rows) == 50, f"应 50 题，实际 {len(rows)}"
     return rows

@@ -1,6 +1,6 @@
 """`2.0-9` 自动回归 harness —— **抖动测量** ＋ **基线比对**。
 
-口径：`docs/local/eval_draft/regression_spec.md`（第一版）
+口径：`docs/local/eval_spec/regression_spec.md`（第一版）
 上游：`layered_eval_design.md`（指标口径 / 判读表）
 
 ## 它只回答一个问题
