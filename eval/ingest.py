@@ -18,7 +18,11 @@ from src.db.connection import close_pool, get_pool  # noqa: E402
 from src.db.kb import KB_STRESS  # noqa: E402
 from src.document_parser.chunking import split_blocks  # noqa: E402
 from src.document_parser.loader import load_document  # noqa: E402
-from src.document_parser.routing import DocumentParseError, failure_report  # noqa: E402
+from src.document_parser.routing import (  # noqa: E402
+    DocumentParseError,
+    failure_report,
+    supported_extensions,
+)
 from src.embedding.base import get_embedding  # noqa: E402
 from src.provenance import document_stamps, sha256_text  # noqa: E402
 from src.vector_store.base import Chunk, get_vector_store  # noqa: E402
@@ -29,10 +33,18 @@ MANIFEST = SYNTH_DIR / "_manifest.json"
 COMPANY_SCOPE = "公司"     # 基础文档与通用文档：全员可见
 EVAL_SECRET_LEVEL = 3
 
-# 认识的扩展名。默认那两个目录里只有 .md/.txt，所以**加长这份清单不改变默认行为**；
-# 它存在的意义是 `--dir docs/local/corpus` 时能收真实语料（pdf/docx/xlsx/...）。
-# ⚠️ `.html` 会**显式失败**（`2.0-40` 未接入）—— 这不藏，让它进失败清单。
-_SUFFIXES = (".md", ".txt", ".pdf", ".docx", ".xlsx", ".pptx", ".csv", ".py", ".html")
+# ---------------------------------------------------------------- 两份清单（`2.0-64`）
+# ⚠️ **别把"支持哪些格式"和"本批收哪些"合成一份** —— 它们**本来就允许不一样**：
+#    前者由 `routing` 决定，后者**随语料走**（这批语料里没有 `.js`，就不必收）。
+#    合成一份的那天起，两份事实就会**静默漂移**（本项目已栽两次：`_ALLOWED`、`parse_plain`）。
+
+# ① **格式清单**（"支持哪些格式"）：⛔ 不抄第二份 —— `routing.supported_extensions()` 是唯一事实源。
+_KNOWN_SUFFIXES = frozenset(f".{e}" for e in supported_extensions())
+
+# ② **采集范围**（"本批要灌哪些"）：**显式白名单，随语料走**。
+#    默认两目录里只有 .md/.txt ⇒ 本表不改变默认行为；它的意义是 `--dir docs/local/corpus` 时能收真实语料。
+#    ⚠️ `.html` 自 `2.0-40` 起能解析；仍在表里 ⇒ 真解析失败会进失败清单，不藏。
+_COLLECT_SUFFIXES = (".md", ".txt", ".pdf", ".docx", ".xlsx", ".pptx", ".csv", ".py", ".html")
 
 
 def _load_manifest() -> dict[str, str]:
@@ -61,11 +73,29 @@ def collect_files(exclude_dept: bool, dirs: list[Path] | None = None) -> list[Pa
     files: list[Path] = []
     for d in (dirs if dirs is not None else [CORPUS_DIR, SYNTH_DIR]):
         if d.exists():
-            files.extend(sorted(p for p in d.glob("*") if p.suffix.lower() in _SUFFIXES))
+            files.extend(sorted(p for p in d.glob("*") if p.suffix.lower() in _COLLECT_SUFFIXES))
     if exclude_dept:
         # 只剔除"部门变体"（文件名以 dept 开头），保留 LLM 生成的不同主题文档
         files = [p for p in files if not p.name.startswith("dept")]
     return files
+
+
+def scope_skipped(dirs: list[Path] | None = None) -> dict[str, int]:
+    """**采集范围外、但路由认得**的文件（按后缀计数）—— 把「静默漏采」变显式。
+
+    ⚠️ **只报告、不采集**：采集范围是**有意**的窄，不是 bug；但「收没收」必须可查 ——
+    以前那份清单自称"认识的扩展名"，于是 `.js` / `.log` 这类文件**既不报错也不进库**。
+    ⚠️ 路由也认不得的后缀（如 `.doc` 旧版二进制）**不算漏采** —— 它们本来就进不来。
+    """
+    skipped: dict[str, int] = {}
+    for d in (dirs if dirs is not None else [CORPUS_DIR, SYNTH_DIR]):
+        if not d.exists():
+            continue
+        for p in sorted(d.glob("*")):
+            suffix = p.suffix.lower()
+            if p.is_file() and suffix in _KNOWN_SUFFIXES and suffix not in _COLLECT_SUFFIXES:
+                skipped[suffix] = skipped.get(suffix, 0) + 1
+    return skipped
 
 
 async def truncate(kb: str = KB_STRESS) -> None:
@@ -95,6 +125,11 @@ async def ingest(exclude_dept: bool = False, dirs: list[Path] | None = None,
     src_desc = ("目录 " + ", ".join(str(d) for d in dirs)) if dirs is not None else "默认（基础 + 合成）"
     print(f"发现 {len(files)} 篇语料（{src_desc}"
           f"{'，已剔除部门变体' if exclude_dept else ''}），kb={kb}，清单条目 {len(manifest)}")
+    skipped = scope_skipped(dirs)
+    if skipped:
+        detail = "、".join(f"{s}×{n}" for s, n in sorted(skipped.items()))
+        print(f"⚠️ 采集范围外（路由认得、本批不收）：{detail}"
+              f" —— 要收就加进 `_COLLECT_SUFFIXES`（`2.0-64`）")
 
     total_chunks = 0
     scope_count: dict[str, int] = {}
