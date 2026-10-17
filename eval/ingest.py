@@ -18,6 +18,8 @@ from src.db.connection import close_pool, get_pool  # noqa: E402
 from src.db.kb import KB_STRESS  # noqa: E402
 from src.document_parser.chunking import split_blocks  # noqa: E402
 from src.document_parser.loader import load_document  # noqa: E402
+from src.cleaning.report import merge, print_table  # noqa: E402
+from src.cleaning.rules import CleanReport, apply_rules  # noqa: E402
 from src.document_parser.routing import (  # noqa: E402
     DocumentParseError,
     failure_report,
@@ -106,7 +108,8 @@ async def truncate(kb: str = KB_STRESS) -> None:
 
 async def ingest(exclude_dept: bool = False, dirs: list[Path] | None = None,
                  kb: str = KB_STRESS,
-                 failures_out: list[DocumentParseError] | None = None) -> int:
+                 failures_out: list[DocumentParseError] | None = None,
+                 clean: str = "off") -> int:
     """灌入语料，返回切片总数。供 CLI 与评测脚本复用。
 
     ⚠️ `dirs` / `kb` / `failures_out` 都有默认值 —— **不传就是原来的行为**。
@@ -134,6 +137,7 @@ async def ingest(exclude_dept: bool = False, dirs: list[Path] | None = None,
     total_chunks = 0
     scope_count: dict[str, int] = {}
     failures: list[DocumentParseError] = []   # 2.0-3：**失败文件清单**，不再静默
+    clean_reports: list[CleanReport] = []     # `2.0-5` shadow：只收集报告，⛔ 不改入库内容
     for i, path in enumerate(files, 1):
         filename = path.name
         doc_id = doc_id_for(filename)
@@ -143,6 +147,8 @@ async def ingest(exclude_dept: bool = False, dirs: list[Path] | None = None,
         # 现在单篇失败只记进清单、继续跑 —— 最后统一打印。
         try:
             parsed = load_document(str(path))
+            if clean == "shadow":                 # `2.0-5` 选项 A：只报告，⛔ 不删改
+                clean_reports.append(apply_rules(parsed, filename))
             chunks = split_blocks(parsed, settings.chunk_size, settings.chunk_overlap)
             if not chunks:
                 raise ValueError(f"解析后无有效文本（解析器 {parsed.parser}）")
@@ -225,6 +231,15 @@ async def ingest(exclude_dept: bool = False, dirs: list[Path] | None = None,
         print("\n✅ 全部解析成功，无失败文件")
     total = await store.count()
     print(f"完成，库中切片总数 {total}")
+
+    if clean == "shadow":
+        # ⚠️ `2.0-5` 选项 A：**只报告、不删改**；真删改（apply）要等干净判据 ＋ 重嵌账
+        print("\n— 清洗 shadow（只报告，入库内容未改动）—")
+        agg, _ = merge(clean_reports)
+        if agg:
+            print_table(agg)
+        else:
+            print("（无规则命中）")
     return total
 
 
@@ -238,13 +253,15 @@ async def main() -> None:
     parser.add_argument("--dir", action="append", default=None,
                         help="语料目录（可重复）。不给 = 默认那两份合成语料目录")
     parser.add_argument("--kb", default=KB_STRESS, help=f"目标库（默认 {KB_STRESS}）")
+    parser.add_argument("--clean", choices=("off", "shadow"), default="off",
+                        help="清洗层（2.0-5）：off=不跑；shadow=只报告、不改入库内容")
     args = parser.parse_args()
 
     dirs = [Path(d) for d in args.dir] if args.dir else None
     if args.truncate:
         await truncate(args.kb)
         print(f"已清空旧数据（kb={args.kb}）")
-    await ingest(args.exclude_dept, dirs, args.kb)
+    await ingest(args.exclude_dept, dirs, args.kb, clean=args.clean)
     await close_pool()
 
 

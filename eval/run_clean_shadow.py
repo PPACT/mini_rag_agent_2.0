@@ -23,6 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from src.cleaning.report import merge, print_table  # noqa: E402
 from src.cleaning.rules import CleanReport, apply_rules  # noqa: E402
 from src.document_parser.loader import load_document  # noqa: E402
 from src.document_parser.routing import DocumentParseError  # noqa: E402
@@ -59,27 +60,8 @@ def main() -> int:
         reports.append(apply_rules(doc, path.name))
 
     # ---- 汇总：按规则聚合（多份报告合并）----
-    agg: dict[str, dict] = defaultdict(lambda: {"action": "", "files": set(), "blocks": 0,
-                                                "hits": 0, "removed": 0})
-    samples: dict[str, list[dict]] = defaultdict(list)
-    for rep in reports:
-        for h in rep.hits:
-            a = agg[h.rule]
-            a["action"] = h.action
-            a["files"].add(rep.path)
-            a["blocks"] += 1
-            a["hits"] += h.count
-            a["removed"] += h.removed
-            samples[h.rule].append({"file": rep.path, "where": h.where,
-                                    "count": h.count, "before": h.before, "after": h.after})
-
-    print(f"{'规则':<9}{'动作':<10}{'文件':>4}{'块':>6}{'命中次数':>9}{'改动字符':>9}")
-    print("-" * 50)
-    for rule in sorted(agg):
-        a = agg[rule]
-        print(f"{rule:<9}{a['action']:<10}{len(a['files']):>4}{a['blocks']:>6}"
-              f"{a['hits']:>9}{a['removed']:>9}")
-    print("-" * 50)
+    agg, samples = merge(reports)
+    print_table(agg)
     print(f"文件 {len(reports)} 份已扫；解析失败 {len(failures)} 份"
           + ("（见 JSON）" if failures else ""))
 

@@ -7,8 +7,9 @@
 ⚠️ **与解析器的分工**：HTML 的「去标签 / 去导航」已由 `trafilatura`（`favor_precision`）在**解析层**完成
 —— 这里**不重复**（`CLN-001/002/008`）。本模块只管**解析后仍留在文本里**的东西。
 
-⚠️ **只 `flag` 不删的四类**（判据有假阳性，删了 = 静默丢信息）：
-`CLN-009` 去广告 · `CLN-022` 去乱码 · `INJ-001` 零宽字符 · `INJ-002` 注入短语。
+⚠️ **只 `flag` 不删的三类**（判据有假阳性，删了 = 静默丢信息）：
+`CLN-009` 去广告 · `CLN-022` 去乱码 · `INJ-002` 注入短语 · **`CLN-036` 疑似孤立页码**。
+⚠️ **`INJ-001` 零宽字符归「删」类**（2026-10-17 文档侧改判：只 flag **不提供任何防护** —— LLM 仍看得见它）。
 
 📌 **源码里一律写 `\\uXXXX` 转义，⛔ 不放不可见的字面字符** —— 不可见字符改不动、也审不出来。
 """
@@ -77,6 +78,8 @@ _FW = re.compile(r"[\uff01-\uff5e\u3000]")
 """全角 ASCII 区（U+FF01–U+FF5E）＋ 全角空格（U+3000）。"""
 
 _PAGE_LINE = re.compile(r"^\s*第?\s*\d+\s*页\s*$")
+_BARE_NUM = re.compile(r"^\s*\d{1,4}\s*$")
+"""疑似孤立页码（`CLN-036`）—— **只 flag**。⚠️ 裸整数行也可能是列表序号 / 金额 / 年份，所以永不删。"""
 _GARBLED = re.compile(r"[\ufffd\ue000-\uf8ff]")
 """替换符（U+FFFD）＋ 私用区（U+E000–U+F8FF）—— 这两类基本只出现在乱码里。"""
 
@@ -172,12 +175,12 @@ def run_text_rules(text: str, *, is_code: bool = False, first_block: bool = Fals
              len(text) - len("\n".join(kept)), page_lines[0])
         text = "\n".join(kept)
 
+    # INJ-001 零宽字符 → **删**（2026-10-17 文档侧改判：只 flag 不提供任何防护 —— LLM 仍看得见它）
+    before_text = text
+    text, n, removed = _sub_count(_ZW, "", text)
+    emit("INJ-001", "remove", n, removed, before_text)
+
     # ---- 以下**只 flag** ----
-    zw = _ZW.findall(text)
-    if zw:
-        i = _ZW.search(text)
-        assert i is not None
-        emit("INJ-001", "flag", len(zw), 0, text[max(0, i.start() - 20): i.end() + 20])
 
     for pat in _INJ_PATTERNS:
         for m in re.finditer(pat, text, flags=re.IGNORECASE):
@@ -194,6 +197,18 @@ def run_text_rules(text: str, *, is_code: bool = False, first_block: bool = Fals
         i = _GARBLED.search(text)
         assert i is not None
         emit("CLN-022", "flag", len(bad), 0, text[max(0, i.start() - 20): i.end() + 20])
+
+    # CLN-036 疑似孤立页码 —— **只 flag**（2026-10-17 文档侧裁定：不放宽 CLN-007 的删除判据）
+    # 判据写细：整行仅数字 **且** 位于块首/块尾 **且** 相邻是空行 ⇒ 裸整数行在正文里很常见，宁可少删
+    lines = text.split("\n")
+    for idx, ln in enumerate(lines):
+        if not _BARE_NUM.match(ln):
+            continue
+        at_edge = idx == 0 or idx == len(lines) - 1
+        blank_around = ((idx == 0 or not lines[idx - 1].strip())
+                        and (idx == len(lines) - 1 or not lines[idx + 1].strip()))
+        if at_edge and blank_around:
+            emit("CLN-036", "flag", 1, 0, ln.strip())
 
     return text, hits
 
