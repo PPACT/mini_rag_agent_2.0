@@ -83,8 +83,10 @@ def is_diverse(chunks: list[Chunk], threshold: int) -> bool:
 
 
 def _format_candidates(chunks: list[Chunk], snippet: int) -> str:
+    # ⚠️ 同样是**不可信内容**（`2.0-5` 注入防护②）—— 歧义判定也会读块内容，必须一起隔开
     return "\n\n".join(
-        f"[{i}] (来源: {c.source_file})\n{c.content[:snippet]}"
+        f"[{i}] (来源: {c.source_file})\n"
+        f"<untrusted_content>{c.content[:snippet]}</untrusted_content>"
         for i, c in enumerate(chunks, 1)
     )
 

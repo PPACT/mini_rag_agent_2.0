@@ -28,7 +28,10 @@ def format_context(chunks: list[Chunk]) -> str:
         body = c.content
         if c.table_complex and c.raw_table:
             body += f"\n\n【原表】\n{c.raw_table}"
-        parts.append(f"[来源{i}] (文件:{c.source_file}, 块:{c.chunk_index})\n{body}")
+        # ⚠️ **不可信内容隔离**（`2.0-5` 注入防护②）：检索块是**数据**，不是指令。
+        #    包起来 + 系统提示词里说明（`prompts/rag_system.yaml`）—— 两者缺一不可。
+        parts.append(f"[来源{i}] (文件:{c.source_file}, 块:{c.chunk_index})\n"
+                     f"<untrusted_content>\n{body}\n</untrusted_content>")
     return "\n\n".join(parts)
 
 
