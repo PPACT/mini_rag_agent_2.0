@@ -194,7 +194,7 @@ docs/                 开发文档
 > 注意不同厂商「关闭思考链」的参数并不一致 —— 换 provider 后请复验一次判定调用
 >（日志中 `thinking_leaked` 计数应为 0）。细节见 [`docs/架构方案.md`](docs/架构方案.md)。
 
-鉴权用演示 token（真实系统替换为 JWT / SSO）：
+鉴权用内置示例 token（生产环境替换为 JWT / SSO）：
 
 | token | 身份 |
 |---|---|
