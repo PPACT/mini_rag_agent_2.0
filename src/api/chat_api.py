@@ -6,7 +6,8 @@ import json
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
+from langgraph.errors import GraphRecursionError
 
 from src import provenance
 from src.agent.graph_builder import get_agent
@@ -28,6 +29,16 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 _NO_ANSWER_TEXT = (
     "抱歉，我**没能从检索到的资料里生成答案**（生成环节没有返回内容）。\n"
     "通常是资料里缺少能回答这个问题的内容 —— 换个问法、或补充更具体的线索可能有用。"
+)
+
+# `2.0-65`：触到编排步数上限时的对外文案。
+# ⚠️ **必须和系统故障的话术分开**（"服务器繁忙"那种）—— 混在一起就是又一次静默降级：
+#    用户无从判断该重试、该改问法，还是该找运维。也**不说"资料里没有"**：
+#    我们只是停下来了，并没有得到"库里没有答案"这个结论。
+_STEP_LIMIT_TEXT = (
+    "⚠️ **这次回答被主动中止了**：系统在生成过程中反复调用工具，达到了**单次问答的步数上限**。\n"
+    "这不是服务故障，也**不代表知识库里没有答案** —— 只是这一步兜住了「可能无限循环」的情况。\n"
+    "建议把问题拆小一点，或补充更具体的条件后再问。"
 )
 
 _UNVERIFIED_HEAD = (
@@ -158,9 +169,33 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)) -> Chat
     _, human_tpl = load_templates()
     human_msg = HumanMessage(content=human_tpl.format(context=context, question=req.question))
     agent = get_agent()
-    result = await agent.ainvoke({"messages": [human_msg]})
+    # ⭐ `2.0-65`：**编排层执行上限**。编排是 LangGraph ＋ 工具调用 —— 理论上
+    #    一句提示词就能把它拖进"调工具 → 看结果 → 再调"的循环，每轮都在烧 token。
+    #    `recursion_limit` 是 LangGraph 的**步数**上限（⛔ 不是"工具轮次"：
+    #    一轮工具 ≈ 2 步，另有起止各 1 步），超限抛 `GraphRecursionError`。
+    #    ⚠️ 取值来自实测（`logs/_probe_tool_rounds_2065.json`），⛔ 不是拍的。
+    try:
+        result = await agent.ainvoke(
+            {"messages": [human_msg]},
+            config={"recursion_limit": settings.agent_recursion_limit},
+        )
+    except GraphRecursionError:
+        # ⚠️ **必须与"真故障"分开**：都回"服务器繁忙"就是又一次静默降级。
+        #    这里如实说"触到步数上限"，并且**不假装答案是完整的**。
+        audit_err("agent_step_limit", question=req.question, user=user.name,
+                  recursion_limit=settings.agent_recursion_limit)
+        # ⚠️ `sources=[]`：这次**没有引用任何块**（模型压根没写成答案）。
+        #    把所有检索结果都列出来 = 暗示"这些被用上了"，与别的分支口径不一致。
+        resp = ChatResponse(answer=_STEP_LIMIT_TEXT, sources=[],
+                            judge_status=ambiguity.status)
+        await redis.set(key, resp.model_dump_json(), ex=settings.cache_ttl)
+        return resp
     answer = str(result["messages"][-1].content)
-    audit("llm", question=req.question, user=user.name, answer_len=len(answer))
+    # ⭐ `2.0-65`：**记录工具轮次**（触发率要有数据，否则下次调上限还是拍）。
+    #    只观测，⛔ 不参与任何判断。
+    tool_rounds = sum(1 for m in result["messages"] if isinstance(m, ToolMessage))
+    audit("llm", question=req.question, user=user.name, answer_len=len(answer),
+          tool_rounds=tool_rounds, recursion_limit=settings.agent_recursion_limit)
 
     # 4b/4c. 静默降级显式化（P0-1 / P0-4）—— 两者**互斥**：没有答案就谈不上"标注不确定"
     if not answer.strip():

@@ -15,6 +15,7 @@ import time
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from langchain_core.messages import HumanMessage
+from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel
 
 from src.agent.graph_builder import get_agent
@@ -95,11 +96,19 @@ async def demo_ask(req: AskRequest) -> dict:
         t1 = time.perf_counter()
         try:
             agent = get_agent()
-            result = await agent.ainvoke({"messages": [HumanMessage(content=human_tpl.format(context=ctx, question=req.question))]})
+            # ⭐ `2.0-65`：与 `/chat` **同一条上限** —— 否则这里是个绕过口
+            #    （`/demo` 也跑同一个 ReAct agent，同样能被拖进工具循环）。
+            result = await agent.ainvoke(
+                {"messages": [HumanMessage(content=human_tpl.format(context=ctx, question=req.question))]},
+                config={"recursion_limit": settings.agent_recursion_limit},
+            )
             answer = str(result["messages"][-1].content)
             if not answer.strip():
                 # 与 /chat 一致（P0-4）：空答案**显式化**，不把空白当正常答案返回
                 answer = "[生成环节未返回内容]"
+        except GraphRecursionError:
+            # ⚠️ 与"生成失败"分开报：这是**主动熔断**，不是上游故障。
+            answer = "[触到编排步数上限，已中止] 这次生成反复调用工具超过上限；建议把问题拆小一点。"
         except Exception as e:  # noqa: BLE001
             answer = f"[生成失败] {e}"
         generate_ms = int((time.perf_counter() - t1) * 1000)

@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import asyncio
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.errors import GraphRecursionError
 
 from src.api import chat_api
 from src.auth.deps import User
@@ -39,11 +40,21 @@ class _FakeRedis:
 
 
 class _FakeAgent:
-    def __init__(self, content: str) -> None:
-        self._content = content
+    """`2.0-65`：`ainvoke` 现在**必须带 `config`**（编排步数上限），桩也要接受它。"""
 
-    async def ainvoke(self, _payload):
-        return {"messages": [AIMessage(content=self._content)]}
+    def __init__(self, content: str, seen_configs: list | None = None,
+                 raises: BaseException | None = None, extra_messages: list | None = None) -> None:
+        self._content = content
+        self._seen_configs = seen_configs
+        self._raises = raises
+        self._extra = extra_messages or []
+
+    async def ainvoke(self, _payload, config=None):
+        if self._seen_configs is not None:
+            self._seen_configs.append(config)
+        if self._raises is not None:
+            raise self._raises
+        return {"messages": [*self._extra, AIMessage(content=self._content)]}
 
 
 class _StubSettings:
@@ -51,23 +62,30 @@ class _StubSettings:
     company_scope = "公司"
     top_k = 5
     cache_ttl = 60
+    agent_recursion_limit = 17   # ⚠️ 故意用非默认值：这样"取的是配置"才验得出来
 
 
 def _chunk(source: str, cid: str = "c1") -> Chunk:
     return Chunk(document_id="d", chunk_index=0, content="年假五天。", source_file=source, id=cid)
 
 
-def _wire(monkeypatch, *, answer="年假五天。", ambiguity=None, chunks=None):
-    """把 `chat()` 的所有外部依赖换成桩；返回 (fake_redis, 捕获到的 ERR 事件名)。"""
+def _wire(monkeypatch, *, answer="年假五天。", ambiguity=None, chunks=None,
+          agent=None, events: list | None = None):
+    """把 `chat()` 的所有外部依赖换成桩；返回 (fake_redis, 捕获到的 ERR 事件名)。
+
+    `events` 传入列表时，顺带收集 `audit()` 的 (事件名, 字段) —— 用于验证埋点。
+    """
     chunks = [_chunk("员工手册.docx")] if chunks is None else chunks
     fake_redis = _FakeRedis()
     errs: list[str] = []
 
     monkeypatch.setattr(chat_api, "get_settings", lambda: _StubSettings())
     monkeypatch.setattr(chat_api, "get_redis", lambda: fake_redis)
-    monkeypatch.setattr(chat_api, "get_agent", lambda: _FakeAgent(answer))
+    monkeypatch.setattr(chat_api, "get_agent", lambda: agent if agent is not None else _FakeAgent(answer))
     monkeypatch.setattr(chat_api, "load_templates", lambda: ("sys", "{context}||{question}"))
     monkeypatch.setattr(chat_api, "audit_err", lambda e, **kw: errs.append(e))
+    if events is not None:
+        monkeypatch.setattr(chat_api, "audit", lambda e, **kw: events.append((e, kw)))
 
     async def _retrieve(question, departments, secret_level, **kw):  # noqa: ARG001
         return "检索上下文", chunks
@@ -189,3 +207,67 @@ def test_cache_hit_short_circuits_retrieval(monkeypatch):
 
     assert _ask().answer == "缓存里的答案"
     assert calls == [], "命中缓存仍去检索了"
+
+
+# ---- `2.0-65`：编排层执行上限 ----
+#
+# 判据（`改进计划.md` 2.0-65）：⛔ 不能拍一个数；超限话术必须与"真故障"区分开；
+# 且**触发率要有数据**（否则下次调上限还是拍）。
+
+
+def test_agent_invoke_receives_recursion_limit(monkeypatch):
+    """⚠️ 反向用例：上限必须**真的传给 LangGraph** —— 写在设置里不传 = 摆设。
+
+    `_StubSettings.agent_recursion_limit = 17` 是故意取的非默认值：
+    如果代码用字面量或默认值，这里就会红。
+    """
+    seen: list = []
+    agent = _FakeAgent("年假五天。", seen_configs=seen)
+    _wire(monkeypatch, agent=agent)
+    _ask()
+    assert seen == [{"recursion_limit": 17}], f"实际传入 {seen}"
+
+
+def test_step_limit_returns_distinct_message(monkeypatch):
+    """触到步数上限 → **一句固定话术**，且**不能**和"没答案"/"服务器繁忙"混为一谈。"""
+    agent = _FakeAgent("", raises=GraphRecursionError("Recursion limit of 17 reached"))
+    _, errs = _wire(monkeypatch, agent=agent)
+    resp = _ask()
+
+    assert resp.answer == chat_api._STEP_LIMIT_TEXT
+    assert "步数上限" in resp.answer
+    assert resp.answer != chat_api._NO_ANSWER_TEXT, "超限 ≠ 没答案"
+    assert "没有找到" not in resp.answer, "我们**没有**得出'库里没有'这个结论"
+    assert "服务器" not in resp.answer, "超限 ≠ 真故障（都回'繁忙'是又一次静默降级）"
+    assert "agent_step_limit" in errs
+    assert resp.need_clarification is False
+
+
+def test_step_limit_result_is_cached(monkeypatch):
+    """固定话术也是可缓存的结论 —— 否则同一问题每次都重新跑一遍循环。"""
+    fake, _ = _wire(monkeypatch,
+                    agent=_FakeAgent("", raises=GraphRecursionError("limit")))
+    _ask()
+    assert len(fake.stored) == 1
+
+
+def test_normal_answer_never_mentions_step_limit(monkeypatch):
+    """反向用例：正常路径**不得**出现上限话术（否则等于把所有回答都标成中止）。"""
+    _wire(monkeypatch)
+    resp = _ask()
+    assert resp.answer != chat_api._STEP_LIMIT_TEXT
+    assert "步数上限" not in resp.answer
+
+
+def test_tool_rounds_are_audited(monkeypatch):
+    """触发率要有数据：每次问答把**实际工具轮次**记进审计。"""
+    events: list = []
+    tool_msgs = [ToolMessage(content="ok", tool_call_id="1"),
+                 ToolMessage(content="ok", tool_call_id="2")]
+    _wire(monkeypatch, agent=_FakeAgent("年假五天。", extra_messages=tool_msgs),
+          events=events)
+    _ask()
+    llm_events = [kw for name, kw in events if name == "llm"]
+    assert llm_events, "没记 llm 审计"
+    assert llm_events[-1]["tool_rounds"] == 2
+    assert llm_events[-1]["recursion_limit"] == 17
