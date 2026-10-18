@@ -70,3 +70,42 @@ def test_kb_is_required():
     """kb 必填：不设默认值，防止「忘传 → 静默落到真实库」。"""
     sig = inspect.signature(queue_mod.enqueue_process_document)
     assert sig.parameters["kb"].default is inspect.Parameter.empty
+
+
+# ---- `2.0-57①`：队列与缓存**分实例** ----
+
+
+def test_cache_and_queue_use_separate_redis_instances():
+    """⚠️ 共用同一个 Redis 时，缓存写满（noeviction）⇒ 写入失败 ⇒ **队列也写不进去**，
+    上传的文档进不了处理队列。两种用途的失败代价不同，就不该共用一个实例。
+    """
+    from src.config.settings import get_settings
+
+    s = get_settings()
+    assert s.redis_url, "缓存地址不能为空"
+    assert s.queue_redis_url, "队列地址不能为空"
+    assert s.redis_url != s.queue_redis_url, "队列与缓存指到了同一个 Redis —— 第 ① 项没生效"
+
+
+def test_worker_and_enqueue_both_point_at_the_queue_instance():
+    """⭐ 契约：**入队方**与**消费方**必须连**同一个**实例。
+
+    只改一处（比如只改 `queue.py`）的后果是"入队进 A、消费从 B" ——
+    任务**静默不执行**，而且两边日志都不会报错。
+    """
+    from urllib.parse import urlparse
+
+    from src.config.settings import get_settings
+    from src.tasks import worker as worker_mod
+
+    s = get_settings()
+    assert "queue_redis_url" in inspect.getsource(queue_mod), "入队侧还在用缓存实例"
+    assert "get_settings().redis_url" not in inspect.getsource(queue_mod), (
+        "入队侧误用了缓存实例（redis_url）"
+    )
+    assert "queue_redis_url" in inspect.getsource(worker_mod), "worker 侧还在用缓存实例"
+
+    rs = worker_mod.WorkerSettings.redis_settings
+    u = urlparse(s.queue_redis_url)
+    assert rs.host == u.hostname, f"worker 连 {rs.host}，队列在 {u.hostname}"
+    assert rs.port == (u.port or 6379), f"worker 连 {rs.port}，队列在 {u.port}"

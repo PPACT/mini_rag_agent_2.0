@@ -98,6 +98,15 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
+    # ⭐ `2.0-57①`（2026-10-18）：**队列与缓存分实例**。
+    #
+    #   原来两者共用同一个 Redis，而它是 `--maxmemory 256mb --maxmemory-policy noeviction`
+    #   ⇒ **缓存一写满，写入就失败；Arq 队列也写不进去** → 上传的文档进不了处理队列。
+    #   `noeviction` 本身是对的（**不静默丢数据**），错的是**两种用途共用一个实例**：
+    #     · 缓存：丢了只是重算 ⇒ 应该 **allkeys-lru 淘汰**，⛔ 不该让写失败；
+    #     · 队列：丢了就是丢任务 ⇒ 继续 **noeviction**，宁可报错。
+    #   ⇒ 默认值**特意不同**（6379 缓存 / 6380 队列）。⚠️ 两者相同 = 没分，且有测试钉住。
+    queue_redis_url: str = "redis://localhost:6380/0"
 
     # 向量库开关（pgvector | milvus）
     vector_store: str = "pgvector"

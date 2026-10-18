@@ -12,7 +12,8 @@ _arq: ArqRedis | None = None
 async def get_arq() -> ArqRedis:
     global _arq
     if _arq is None:
-        _arq = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
+        # ⭐ `2.0-57①`：队列走**独立实例** —— 不与问答缓存共用（缓存写满不该拖垮入队）
+        _arq = await create_pool(RedisSettings.from_dsn(get_settings().queue_redis_url))
     return _arq
 
 

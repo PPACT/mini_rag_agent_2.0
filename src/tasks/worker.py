@@ -32,7 +32,10 @@ class WorkerSettings:
     functions = [document_task.process_document]
     # `2.0-71`：每小时清一次过期 staged（:17 —— ⛔ 不卡整点，避开所有人的定时任务）
     cron_jobs = [cron(cleanup_expired_staged, minute=17)]
-    redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
+    # ⭐ `2.0-57①`：worker 也必须连**队列实例** ——
+    #    ⚠️ 这里与 `queue.py` 是**两处**读配置；指错一处就是"入队进 A、消费从 B"
+    #    （任务静默不执行）。`tests/test_queue.py` 有一条契约测试钉住两边同源。
+    redis_settings = RedisSettings.from_dsn(get_settings().queue_redis_url)
     on_startup = startup
     on_shutdown = shutdown
     max_tries = 3       # 失败重试次数，超过后 job 判失败

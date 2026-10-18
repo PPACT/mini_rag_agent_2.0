@@ -45,10 +45,16 @@ services:
       timeout: 5s
       retries: 10
 
+  # ⭐ `2.0-57①`：**缓存与队列分两个实例**（原来共用一个）。
+  #   共用的后果：缓存写满（256MB、noeviction）⇒ **写入失败** ⇒ Arq 队列也写不进去
+  #   ⇒ 上传的文档进不了处理队列。两种用途的**失败代价不同**，策略就不该一样：
+  #     · 缓存：丢了只是重算 ⇒ `allkeys-lru` **淘汰**，⛔ 不让写失败；
+  #     · 队列：丢了就是丢任务 ⇒ 保持 `noeviction`，宁可报错。
   redis:
     image: redis:7-alpine
     container_name: rag_demo_redis
-    command: redis-server --maxmemory 256mb --maxmemory-policy noeviction
+    # 缓存策略：内存到顶就淘汰最久未用的键（缓存是可再生的，不该让业务写失败）
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     ports:
       - "6379:6379"
     mem_limit: 512m
@@ -60,7 +66,24 @@ services:
       timeout: 5s
       retries: 10
 
+  # 队列专用实例：**绝不与缓存共用** —— 这里是"写不进去 = 丢任务"，故保持 noeviction
+  redis_queue:
+    image: redis:7-alpine
+    container_name: rag_queue_redis
+    command: redis-server --maxmemory 128mb --maxmemory-policy noeviction --appendonly yes
+    ports:
+      - "6380:6379"
+    mem_limit: 256m
+    volumes:
+      - redisqueuedata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   pgdata:
   pgdata_stress:
   redisdata:
+  redisqueuedata:
