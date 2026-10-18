@@ -28,6 +28,10 @@ class Chunk:
     end_offset: int | None = None
     title: str | None = None
     is_deprecated: bool = False
+    # ⭐ `2.0-72` / `提醒 #30`：文档级权威分（0 普通 / 1 正式 / 2 制度）。
+    #    ⚠️ **只是元数据**，参与排序的唯一方式是 `rag/authority.py` 的**近分 tie-break**，
+    #    ⛔ 不做乘法加权（`§1.138③` 的裁定）。
+    authority: int = 0
 
     # ---- 2.0 解析元数据（迁移 0005）----
     page: int | None = None

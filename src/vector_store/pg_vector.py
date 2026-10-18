@@ -9,7 +9,8 @@ _SELECT_COLS = """
     c.id::text, c.document_id::text, c.chunk_index, c.content,
     c.source_file, c.department, c.secret_level,
     c.start_offset, c.end_offset, c.title,
-    c.page, c.raw_table, c.table_complex
+    c.page, c.raw_table, c.table_complex,
+    d.authority
 """
 
 # 向量距离的原生运算符形态（$1 = 查询向量）。
@@ -32,6 +33,7 @@ def _row_to_chunk(r) -> Chunk:
         page=r["page"],
         raw_table=r["raw_table"],
         table_complex=r["table_complex"],
+        authority=int(r["authority"] or 0),
         score=float(r["score"]),
     )
 

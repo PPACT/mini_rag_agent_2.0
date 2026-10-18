@@ -6,6 +6,7 @@ import time
 from src.config.settings import get_settings
 from src.embedding.base import get_embedding
 from src.rag.query_rewriter import expand_queries
+from src.rag.authority import authority_tiebreak
 from src.rag.reranker import get_reranker, resolve_backend
 from src.vector_store.base import AccessFilter, Chunk, get_vector_store
 
@@ -146,8 +147,23 @@ async def retrieve(
 
     # 精排：用更强的判断力纠正"语义相近但答非所问"
     t0 = time.perf_counter()
+    authority_moved = 0
+    authority_note = "off"
     if use_rerank and len(candidates) > top_k:
-        chunks = await get_reranker(rerank_backend).rerank(question, candidates, top_k)
+        ordered = await get_reranker(rerank_backend).score_order(question, candidates)
+        # ⭐ `提醒 #30`：`authority` **近分 tie-break**（默认关，见 settings）。
+        #    ⚠️ 必须在**截断到 top_k 之前**做 —— 只在 top_k 内部调整，就永远
+        #    解决不了"制度文档被挤到第 6 名"这种真正要它解决的问题。
+        if settings.authority_tiebreak_enabled:
+            if all(s is not None for _, s in ordered):
+                ordered, authority_moved = authority_tiebreak(
+                    ordered, settings.authority_tiebreak_epsilon)
+                authority_note = "on"
+            else:
+                # ⚠️ 这个后端只给顺序、不给可比的分差（如 LLM 精排）⇒ **不生效**，
+                #    而且要**显式记下来**，⛔ 不假装它跑了。
+                authority_note = "skipped_no_scores"
+        chunks = [c for c, _ in ordered][:top_k]
         reranked = True
     else:
         chunks = candidates[:top_k]
@@ -164,6 +180,10 @@ async def retrieve(
         trace["recall_k"] = recall_k
         trace["candidates"] = candidates          # RRF 融合后的粗排候选池
         trace["final"] = chunks                   # 精排（或截断）后的最终结果
+        # ⭐ `提醒 #30`：tie-break 的**触发量**
+        #    `moved` = 被移动的条数（0 = 这次没起作用，⛔ 不等于"没用"）
+        #    `note`  = on / off / skipped_no_scores（后端没有可比分数时不假装跑了）
+        trace["authority_tiebreak"] = {"moved": authority_moved, "note": authority_note}
         # ⭐ `2.0-59` 工程层埋点：**分段耗时**（只观测，⛔ 不改变任何结果）。
         #    ⚠️ `rerank` 关掉时 `ms_rerank` 只是"截断"那一步（≈0）——**不是 0 成本**，
         #    读的人要按 `reranked` 判断这一段到底有没有真跑精排。

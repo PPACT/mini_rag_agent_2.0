@@ -23,9 +23,24 @@ class BaseReranker(ABC):
     """精排统一接口。上层只依赖此接口，切换实现（LLM / 本地模型 / 云端 API）不改业务代码。"""
 
     @abstractmethod
-    async def rerank(self, query: str, chunks: list[Chunk], top_n: int) -> list[Chunk]:
-        """按与 query 的相关性重排 chunks，返回前 top_n 条。"""
+    async def score_order(self, query: str,
+                          chunks: list[Chunk]) -> list[tuple[Chunk, float | None]]:
+        """按与 query 的相关性排序，返回**全量**候选 ＋ 分数。
+
+        ⭐ `提醒 #30`：上层需要"**相邻两条差多少分**"才能做 `authority` 近分 tie-break，
+        而只返回排好序的列表是**拿不到分差**的。所以接口改成带分数。
+
+        ⚠️ 分数可能是 `None`：LLM 精排只给**顺序**、不给可比的数值分
+        （`§1.138③` 的 ε 依赖"分差"，在那种后端下 tie-break **不生效**，须显式说明，
+        ⛔ 不要用"名次差"冒充"分差"）。
+        """
         raise NotImplementedError
+
+    async def rerank(self, query: str, chunks: list[Chunk], top_n: int) -> list[Chunk]:
+        """按与 query 的相关性重排 chunks，返回前 top_n 条（`score_order` 的薄封装）。"""
+        if len(chunks) <= top_n:
+            return list(chunks[:top_n])
+        return [c for c, _ in await self.score_order(query, chunks)][:top_n]
 
 
 class LLMReranker(BaseReranker):
@@ -34,10 +49,8 @@ class LLMReranker(BaseReranker):
     def __init__(self) -> None:
         self._snippet = get_settings().rerank_snippet_chars
 
-    async def rerank(self, query: str, chunks: list[Chunk], top_n: int) -> list[Chunk]:
-        if len(chunks) <= top_n:
-            return chunks[:top_n]
-
+    async def score_order(self, query: str,
+                          chunks: list[Chunk]) -> list[tuple[Chunk, float | None]]:
         system_tpl, human_tpl = load_rerank_templates()
         candidates = "\n".join(
             f"[{i}] {c.content[: self._snippet]}" for i, c in enumerate(chunks)
@@ -62,8 +75,9 @@ class LLMReranker(BaseReranker):
             order = []
 
         if not order:
-            return chunks[:top_n]
-        return [chunks[i] for i in order][:top_n]
+            # 分数一律 None：这条后端**没有可比的数值分**（见 `score_order` 的说明）
+            return [(c, None) for c in chunks]
+        return [(chunks[i], None) for i in order]
 
     @staticmethod
     def _parse(raw: str, n: int) -> list[int]:
@@ -221,9 +235,8 @@ class LocalCrossEncoderReranker(BaseReranker):
                   dtype=self._dtype or "default")
         return self._model
 
-    async def rerank(self, query: str, chunks: list[Chunk], top_n: int) -> list[Chunk]:
-        if len(chunks) <= top_n:
-            return chunks[:top_n]
+    async def score_order(self, query: str,
+                          chunks: list[Chunk]) -> list[tuple[Chunk, float | None]]:
         model = self._ensure_model()
         pairs = [(query, text_for_rerank(query, c.content or "", self._snippet,
                                          route=self._route, threshold=self._density))
@@ -231,7 +244,7 @@ class LocalCrossEncoderReranker(BaseReranker):
         # CrossEncoder.predict 是同步阻塞的 → 丢到线程池，避免卡住事件循环
         scores = await asyncio.to_thread(model.predict, pairs)
         order = sorted(range(len(chunks)), key=lambda i: -float(scores[i]))
-        return [chunks[i] for i in order][:top_n]
+        return [(chunks[i], float(scores[i])) for i in order]
 
 
 VALID_BACKENDS: tuple[str, ...] = ("local", "llm")

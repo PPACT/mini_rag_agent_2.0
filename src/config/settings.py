@@ -188,6 +188,22 @@ class Settings(BaseSettings):
     # 提到 100 仅多 ~3ms 即可恢复满召回 —— 默认值会静默降低检索质量。
     hnsw_ef_search: int = 100
 
+    # ⭐ `提醒 #30`（`2.0-72` 的检索加权部分）：`authority` 的**近分 tie-break**。
+    #
+    #   口径（`§1.138③`，⛔ 不改）：**只在两条候选的精排分差 ≤ ε 时**让 `authority`
+    #   高者优先；⛔ **不做乘法加权**（乘数要调参，而 23 份语料上没有区分度 —— `P-4`）。
+    #
+    #   ⚠️ **默认关闭**：没跑过开/关两臂对照的排序改动**不许默认生效**。
+    #      要打开就显式设 `AUTHORITY_TIEBREAK_ENABLED=true`（`提醒 #30③` 的两臂实验就是这么做的）。
+    #   ⚠️ ε 的来历见 `logs/authority_tiebreak_epsilon_20261018.json` —— 由**实测分差分布**定，
+    #      ⛔ 不是拍的。调到别的值请重新测一次分布，别凭感觉。
+    authority_tiebreak_enabled: bool = False
+    # ⭐ 实测值（2026-10-18）：50 题 × 全量候选池（20）× 本地精排 ⇒ 950 个**相邻分差**，
+    #    p10 = **1.83e-05**（p25 7.1e-05 ｜ p50 4.8e-04 ｜ p90 6.96e-02）。
+    #    📄 `logs/authority_tiebreak_epsilon_20261018.json`
+    #    ⚠️ 换语料 / 换精排模型 / 改送文路由都会让这个分布变 —— **重测再改**，⛔ 别沿用。
+    authority_tiebreak_epsilon: float = 1.83e-05
+
     # LLM 思考链（DeepSeek 推理模型专用开关）
     # 实测（2026-09-19）：**判定/精排这类分类任务，开思考是有害的** ——
     #   ① 思考（reasoning_content）与结论（content）**共用 max_tokens 预算**，
