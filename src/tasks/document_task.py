@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 
 from src.cache.redis_client import invalidate_cache
+from src.cleaning.rules import apply_rules, injection_hits
 from src.config.settings import get_settings
 from src.db.connection import get_pool
 from src.document_parser.chunking import split_blocks
@@ -25,10 +26,13 @@ async def process_document(
     pool = await get_pool(kb)
 
     row = await pool.fetchrow(
-        "SELECT id, filename, original_name, version FROM documents WHERE id = $1::uuid",
+        "SELECT id, filename, original_name, version, status FROM documents WHERE id = $1::uuid",
         document_id,
     )
     if row is None:
+        return
+    if row["status"] == "staged":
+        # `2.0-71`：staged 要等 `/documents/{id}/commit` —— worker ⛔ 不擅自处理
         return
 
     await pool.execute(
@@ -50,6 +54,23 @@ async def process_document(
         audit("parse", document_id=document_id, kb=kb, parser=parsed.parser,
               blocks=len(parsed.blocks), kinds=parsed.kind_counts(),
               chunks=len(chunks), warnings=parsed.warnings[:5])
+
+        # `2.0-72` **隔离闸**：解析后、嵌入前跑注入检测（零宽 / 注入短语）。
+        # 命中 ⇒ 标 `quarantined` 并删掉它可能残留的旧切片 —— ⛔ 污染内容绝不进检索。
+        # ⚠️ 这里**不抛异常**（抛了会落进 except 把状态改成 failed，覆盖掉 quarantined）。
+        inj = injection_hits(apply_rules(parsed, row["original_name"] or row["filename"]))
+        if inj:
+            rules = sorted({h.rule for h in inj})
+            await pool.execute(
+                "UPDATE documents SET status='quarantined', error=$2, updated_at=now() "
+                "WHERE id=$1::uuid",
+                document_id, f"注入信号 {rules}；样例：{inj[0].before[:60]}",
+            )
+            await get_vector_store(kb).delete_by_document(document_id)
+            await invalidate_cache(kb)
+            audit("document_quarantined", document_id=document_id, kb=kb,
+                  rules=rules, hits=len(inj))
+            return
 
         embedding = get_embedding()
         # ⚠️ **向量只算 content**（表格这里是自然语言版）——
@@ -95,6 +116,7 @@ async def process_document(
             """
             UPDATE documents
                SET status='completed', chunk_count=$2, updated_at=now(),
+                   ingested_at=now(),
                    source_hash=$3, parser_version=$4, clean_rules_version=$5,
                    chunker_version=$6, embedding_model=$7
              WHERE id=$1::uuid

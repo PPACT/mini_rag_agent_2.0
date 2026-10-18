@@ -6,11 +6,19 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from src.auth.access import (
+    AUTHORITY_LEVELS,
+    STAGED_TTL_HOURS,
+    commit_ttl_ok,
+    document_visible,
+    is_direct_uploader,
+)
 from src.auth.deps import User, get_current_user
 from src.config.settings import get_settings
 from src.db.connection import get_pool
 from src.db.kb import KB_REAL, validate
 from src.document_parser.routing import supported_extensions
+from src.observability.tracer import audit
 from src.schemas.document import DocumentStatus, UploadResponse
 from src.tasks.queue import enqueue_process_document
 
@@ -27,11 +35,12 @@ _ALLOWED = supported_extensions()
 async def upload_document(
     file: UploadFile = File(...),
     secret_level: int = Form(0),
+    authority: int = Form(0),
     document_id: str | None = Form(None),
     kb: str = Form(KB_REAL),
     user: User = Depends(get_current_user),
 ) -> UploadResponse:
-    """上传文档：落盘 -> 写 documents(pending) -> 入队异步处理。
+    """上传文档：落盘 -> 写 documents(pending | staged) -> 入队异步处理。
 
     department 取自鉴权 token（服务端身份）；secret_level 为文档密级（表单），
     校验不能超过上传者自己的密级。传 document_id 则更新已有文档（version+1 替换 chunk）。
@@ -59,6 +68,14 @@ async def upload_document(
             status_code=403,
             detail=f"无权上传密级 {secret_level} 的文档（你的密级为 {user.secret_level}）",
         )
+    if authority not in AUTHORITY_LEVELS:
+        raise HTTPException(status_code=400,
+                            detail="authority 只能是 0（普通）/ 1（正式）/ 2（制度）")
+
+    # `2.0-71`：**直通判定看服务端角色**（⛔ 不由客户端传）——
+    # `admin` / `部门负责人` 直通；其余先 `staged`，等 `/documents/{id}/commit` 确认。
+    mode = "direct" if is_direct_uploader(user) else "staged"
+    initial_status = "pending" if mode == "direct" else "staged"
 
     os.makedirs(settings.upload_dir_abs, exist_ok=True)
     filename = f"{uuid.uuid4().hex}.{ext}"
@@ -85,12 +102,26 @@ async def upload_document(
 
     pool = await get_pool(kb)
     if document_id:
+        # `2.0-70`：**先校验归属**再 UPDATE —— 以前谁都能覆盖别人的文档。
+        # ⚠️ 归属（部门 / 密级）**不由更新者改写**：换文件 ≠ 换主人（否则就成了越权的权限变更）
+        existing = await pool.fetchrow(
+            "SELECT department, secret_level FROM documents "
+            "WHERE id=$1::uuid AND is_deleted=false",
+            document_id,
+        )
+        if existing is None or not document_visible(
+                existing["department"], existing["secret_level"], user):
+            os.remove(dest)
+            raise HTTPException(status_code=404, detail="文档不存在或无权修改")
+
         # 更新已有文档：版本号 +1，替换 chunk（worker 会删旧插新）
         updated_id = await pool.fetchval(
-            "UPDATE documents SET filename=$2, original_name=$3, version=version+1, status='pending', "
-            "error=NULL, updated_at=now() "
+            "UPDATE documents SET filename=$2, original_name=$3, version=version+1, status=$4, "
+            "error=NULL, updated_at=now(), uploaded_by=$5, authority=$6, ingest_mode=$7, "
+            "ingested_at=NULL "
             "WHERE id=$1::uuid AND is_deleted=false RETURNING id::text",
-            document_id, filename, original_name,
+            document_id, filename, original_name, initial_status,
+            user.name, authority, mode,
         )
         if updated_id is None:
             os.remove(dest)
@@ -98,12 +129,19 @@ async def upload_document(
         doc_id = document_id
     else:
         doc_id = await pool.fetchval(
-            "INSERT INTO documents (filename, original_name, status) VALUES ($1, $2, 'pending') "
-            "RETURNING id::text",
-            filename, original_name,
+            "INSERT INTO documents (filename, original_name, status, department, secret_level, "
+            "uploaded_by, authority, ingest_mode) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id::text",
+            filename, original_name, initial_status,
+            user.department, secret_level, user.name, authority, mode,
         )
-    await enqueue_process_document(kb, doc_id, user.department, secret_level)
-    return UploadResponse(document_id=doc_id, status="pending")
+
+    audit("document_upload", document_id=doc_id, kb=kb, user=user.name,
+          department=user.department, secret_level=secret_level,
+          authority=authority, mode=mode, status=initial_status)
+    if mode == "direct":
+        await enqueue_process_document(kb, doc_id, user.department, secret_level)
+    return UploadResponse(document_id=doc_id, status=initial_status)
 
 
 @router.get("/{document_id}", response_model=DocumentStatus)
@@ -124,10 +162,61 @@ async def get_document_status(
     kb = validate(kb)
     pool = await get_pool(kb)
     row = await pool.fetchrow(
-        "SELECT id::text AS document_id, filename, original_name, status, chunk_count, error "
-        "FROM documents WHERE id = $1::uuid",
+        "SELECT id::text AS document_id, filename, original_name, status, chunk_count, error, "
+        "department, secret_level "
+        "FROM documents WHERE id = $1::uuid AND is_deleted=false",
         document_id,
     )
-    if row is None:
+    # `2.0-70`：**文档级权限** —— 以前这里谁都能查。
+    # ⚠️ 越权一律回 **404**（⛔ 不回 403）：403 等于告诉对方"这份文档确实存在"。
+    if row is None or not document_visible(row["department"], row["secret_level"], user):
         raise HTTPException(status_code=404, detail="文档不存在")
-    return DocumentStatus(**dict(row))
+    return DocumentStatus(**{k: row[k] for k in
+                             ("document_id", "filename", "original_name",
+                              "status", "chunk_count", "error")})
+
+
+@router.post("/{document_id}/commit", response_model=DocumentStatus)
+async def commit_staged_document(
+    document_id: str,
+    kb: str = KB_REAL,
+    user: User = Depends(get_current_user),
+) -> DocumentStatus:
+    """`2.0-71`：确认 `staged` 文档 → 真正入库。
+
+    ⚠️ **嵌入与写 chunk 仍由 worker 做**（与直通同一条管道）—— 这里只负责
+    「校验 ＋ 把状态推回 `pending` ＋ 入队」，⛔ 不另写一套 ingest。
+    ⚠️ **过期显式报错**（410），⛔ 不静默清理、⛔ 不拿旧文件继续跑。
+    """
+    kb = validate(kb)
+    pool = await get_pool(kb)
+    row = await pool.fetchrow(
+        "SELECT id::text AS document_id, filename, original_name, status, chunk_count, error, "
+        "department, secret_level, created_at "
+        "FROM documents WHERE id=$1::uuid AND is_deleted=false",
+        document_id,
+    )
+    if row is None or not document_visible(row["department"], row["secret_level"], user):
+        raise HTTPException(status_code=404, detail="文档不存在")
+    if row["status"] == "quarantined":
+        raise HTTPException(status_code=409, detail="文档已被隔离（quarantined），不能 commit")
+    if row["status"] != "staged":
+        raise HTTPException(status_code=409,
+                            detail=f"只有 staged 文档需要 commit（当前 status={row['status']}）")
+    if not commit_ttl_ok(row["created_at"]):
+        raise HTTPException(
+            status_code=410,
+            detail=f"staged 文档已过期（超过 {STAGED_TTL_HOURS} 小时），请重新上传",
+        )
+
+    await pool.execute(
+        "UPDATE documents SET status='pending', error=NULL, updated_at=now() WHERE id=$1::uuid",
+        document_id,
+    )
+    await enqueue_process_document(kb, document_id, row["department"], row["secret_level"])
+    audit("document_commit", document_id=document_id, kb=kb, user=user.name)
+    return DocumentStatus(
+        document_id=row["document_id"], filename=row["filename"],
+        original_name=row["original_name"], status="pending",
+        chunk_count=row["chunk_count"], error=None,
+    )

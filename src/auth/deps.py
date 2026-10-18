@@ -13,12 +13,14 @@ class User:
     name: str
     department: str
     secret_level: int
+    role: str = "member"
+    """`admin` / `部门负责人` / `member`（`2.0-71` 直通判定用；⚠️ 服务端身份，⛔ 不由客户端传）。"""
 
 
 # 演示用户表（token -> 身份）。真实系统替换为 DB 查询 / JWT 校验 / SSO。
 DEMO_USERS: dict[str, User] = {
-    "demo-it-token": User(name="张三", department="IT", secret_level=3),
-    "demo-hr-token": User(name="李四", department="HR", secret_level=2),
+    "demo-it-token": User(name="张三", department="IT", secret_level=3, role="admin"),
+    "demo-hr-token": User(name="李四", department="HR", secret_level=2, role="部门负责人"),
     "demo-public-token": User(name="访客", department="公开", secret_level=0),
 }
 

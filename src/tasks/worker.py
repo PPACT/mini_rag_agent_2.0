@@ -1,10 +1,19 @@
 """Arq worker 入口（arq 0.28：自定义 WorkerSettings 类，用 `python -m arq` 启动）。"""
 from __future__ import annotations
 
+import logging
+
 from arq.connections import RedisSettings
 
 from src.config.settings import get_settings
 from src.tasks import document_task
+
+# ⚠️ **worker 也要配 logging** —— `src/main.py` 里那份只对 API 进程生效。
+# 不配的后果：默认级别是 WARNING ⇒ `audit()`（`logger.info`）**静默消失**。
+# 实测（2026-10-18）：隔离审计 `document_quarantined` 在日志里 **0 行**，
+# 而 2.0-72 的验收要求「污染处置有审计」—— 静默 = 没做。
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 
 async def startup(ctx: dict) -> None:

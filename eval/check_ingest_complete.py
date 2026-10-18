@@ -81,8 +81,10 @@ async def check(kb: str, directory: str) -> dict:
     pool = await get_pool(kb)
     try:
         rows = await pool.fetch(
+            # ⚠️ `2.0-71`：**排除 `staged`** —— 它们还没 commit（0 块），
+            #    算进来会被报成「多一份 ＋ 空文档」，把真问题淹掉
             "SELECT COALESCE(original_name, filename) AS n, chunk_count FROM documents "
-            "WHERE is_deleted = false")
+            "WHERE is_deleted = false AND status <> 'staged'")
     finally:
         await close_pool()
 

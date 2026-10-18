@@ -248,6 +248,15 @@ def _header_footer(blocks: list[Block]) -> list[RuleHit]:
     return out
 
 
+def injection_hits(report: CleanReport) -> list[RuleHit]:
+    """`2.0-72` 隔离闸用：只挑注入信号（`INJ-001` 零宽 / `INJ-002` 短语）。
+
+    ⚠️ 抽成函数是为了**能单测**「命中 ⇒ 隔离、不命中 ⇒ 放行」这条判据本身，
+    而不是把它埋在 worker 里只能靠端到端撞。
+    """
+    return [h for h in report.hits if h.rule in {"INJ-001", "INJ-002"}]
+
+
 def apply_rules(doc: ParsedDoc, path: str = "") -> CleanReport:
     """跑整份文档（**只报告**）。返回的 `hits` 里带样例，供人工判误伤。"""
     report = CleanReport(path=path)
