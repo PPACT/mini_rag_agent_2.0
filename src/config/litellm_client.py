@@ -1,10 +1,14 @@
 """LLM 统一收口（LiteLLM）。**换厂商只改配置，业务代码不动**。"""
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from dataclasses import dataclass
+from typing import Literal
 
 import litellm
+import openai
 
 from src.config.settings import get_settings
 from src.observability.tracer import audit, audit_err
@@ -13,6 +17,74 @@ logger = logging.getLogger("rag.llm")
 
 # 思考链告警只响一次（每进程）
 _thinking_warned = False
+
+
+# ════════════════════════════════════════════════════════════════════════
+# `2.0-58`：**区分「慢」与「坏」**
+# ════════════════════════════════════════════════════════════════════════
+#
+# 背景（`§1.92` 已定性）：判定路径 `8s × 0 重试` 的取舍算的是"单请求最坏延迟"，
+# 漏掉了另一个维度 —— **一次瞬时故障 → 一次慢窗口 → 整批 `unknown`**，
+# 代价从"一个用户等 8s"变成"**N 个用户各看到一段假标注**"。
+#
+# 但那不等于"把重试加回来"：加了就是 `8s × N`，长尾重新放大。
+# 真正的差别在于**失败本身要花多久**：
+#   · **慢**（超时）—— 已经花掉整份预算，再试只会让用户多等一份 ⇒ ⛔ 不重试
+#   · **坏**（连接被拒 / SSL 握手失败 / 5xx）—— 秒级就返回，再试一次几乎不花时间
+# ⇒ 只对后者重试，且**用时超过阈值的一律不重试**（那已经不是"坏"，是"慢"）。
+#
+FailureKind = Literal["timeout", "transient", "fatal"]
+
+# ⚠️ **顺序要紧，而且陷阱在 openai 那一层**（实测 2026-10-18，litellm 1.99.0）：
+#    `litellm.Timeout` 与 `litellm.APIConnectionError` 是**兄弟**（都挂在
+#    `openai.APIConnectionError` 下面），但 **`openai.APITimeoutError`
+#    是 `openai.APIConnectionError` 的子类**。真实抛出来的异常经常是 openai 那套
+#    ⇒ 若先判 `openai.APIConnectionError`，**超时会被当成"坏"并被重试**，
+#    正是本单要避免的那个回退。所以 timeout 那一组**必须排在前面**。
+_TIMEOUT_ERRORS: tuple[type[BaseException], ...] = (
+    litellm.Timeout,
+    openai.APITimeoutError,
+    asyncio.TimeoutError,
+    TimeoutError,
+)
+# "坏"：秒级就能返回的那一类。`OSError` 覆盖 `ssl.SSLError`（`§1.92` 的 122 条 100% 是它）。
+_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
+    litellm.APIConnectionError,
+    litellm.ServiceUnavailableError,
+    litellm.InternalServerError,
+    litellm.RateLimitError,
+    openai.APIConnectionError,
+    openai.InternalServerError,
+    openai.RateLimitError,
+    ConnectionError,
+    OSError,
+)
+
+
+class LLMCallError(Exception):
+    """一次 LLM 调用**最终失败**（该重试的已重试完），带**失败类别**。
+
+    存在的理由：以前所有失败都只是一条裸异常，调用方一律记成 `unknown` ——
+    **"慢"与"坏"长得一模一样**。于是既分不清"整批 `unknown`"是外部瞬时故障
+    还是结构性缺陷，也给不出不同的处置。
+    """
+
+    def __init__(self, original: BaseException, kind: FailureKind,
+                 attempts: int, elapsed_s: float) -> None:
+        self.original = original
+        self.kind = kind
+        self.attempts = attempts
+        self.elapsed_s = elapsed_s
+        super().__init__(f"{kind}（尝试 {attempts} 次，累计 {elapsed_s:.2f}s）：{original}")
+
+
+def classify_failure(exc: BaseException) -> FailureKind:
+    """把一次调用异常归到「慢 / 坏 / 致命」三类（判定顺序见 `_TIMEOUT_ERRORS` 上方注释）。"""
+    if isinstance(exc, _TIMEOUT_ERRORS):
+        return "timeout"
+    if isinstance(exc, _TRANSIENT_ERRORS):
+        return "transient"
+    return "fatal"
 
 
 def warn_if_thinking_enabled() -> None:
@@ -97,9 +169,15 @@ async def complete_with_meta(messages: list[dict], temperature: float = 0.1) -> 
     temperature 约定：**要求可复现的任务（精排、歧义判定）传 0**；
     需要多样性的任务（查询改写）保留默认 0.1；答案生成由 Agent 侧控制。
 
-    ⚠️ 本函数是**延迟敏感**路径（判定 / 精排）的收口：超时与重试取自
-    `llm_timeout_judge` / `llm_max_retries_judge`（D9-⑨），**默认 8s 且不重试** ——
+    ⚠️ 本函数是**延迟敏感**路径（判定 / 精排）的收口：超时取自
+    `llm_timeout_judge`（D9-⑨，**默认 8s**）——
     生成路径（Agent）走 `graph_builder`，另有更宽的一档，两者**不做对齐**。
+
+    ⭐ `2.0-58`：**"慢"不重试，"坏"重试一次**。超时（已花掉整份预算）→ 直接
+    `raise LLMCallError(kind="timeout")`；连接/SSL/5xx 这类**秒级失败** → 再试一次
+    （`llm_fastfail_retries` / `llm_fastfail_within_s`），仍失败则
+    `raise LLMCallError(kind="transient")`。调用方按 `kind` 区分处置，
+    ⛔ 不要再把所有失败都叫 `unknown`。
     """
     settings = get_settings()
     if not settings.llm_api_key:
@@ -116,7 +194,7 @@ async def complete_with_meta(messages: list[dict], temperature: float = 0.1) -> 
         # 换 openai/ 后 7298 字思考 / 11591ms，且 finish=length。下面的告警就是兜这个底。
         extra["reasoning_effort"] = "none"
 
-    resp = await litellm.acompletion(
+    call_kwargs = dict(
         # provider 前缀决定用哪套**协议适配器**（可配，默认 "deepseek"——理由见 settings.py）
         model=f"{settings.llm_provider}/{settings.llm_model}",
         messages=messages,
@@ -125,7 +203,9 @@ async def complete_with_meta(messages: list[dict], temperature: float = 0.1) -> 
         temperature=temperature,
         max_tokens=settings.llm_max_tokens,   # D9-⑩：原为硬编码 2048
         timeout=settings.llm_timeout_judge,   # D9-⑨：原为硬编码 60（等于没有超时）
-        num_retries=settings.llm_max_retries_judge,  # 显式 0，不再依赖 litellm 默认值
+        # ⚠️ 仍是显式 0：**litellm 层的重试放弃不用**，重试由下面这一层做 ——
+        #    因为只有这一层才知道"这次失败是快的还是慢的"（`2.0-58`）。
+        num_retries=settings.llm_max_retries_judge,
         # ⚠️ **默认 False = 不静默丢弃**（`2.0-41`）。
         # 原来是写死的 `True`：换 provider 后 `reasoning_effort="none"` 会被**静默丢掉**
         # → **思考链复活且不报错**（D8 踩过的那个坑）。
@@ -134,6 +214,43 @@ async def complete_with_meta(messages: list[dict], temperature: float = 0.1) -> 
         drop_params=settings.llm_drop_params,
         **extra,
     )
+
+    # ⭐ `2.0-58`：只重试「坏」（秒级失败），⛔ 不重试「慢」（超时）。
+    #   最坏耗时上界：一次性超时 = `timeout`（8s）；
+    #   快速失败后撞超时 = `within_s + timeout`（2s + 8s = 10s）。
+    #   ⛔ 不会回到 D9 之前的 `60s × 4`。
+    max_attempts = 1 + max(0, settings.llm_fastfail_retries)
+    started_at = time.perf_counter()
+    resp = None
+    for attempt in range(1, max_attempts + 1):
+        attempt_started = time.perf_counter()
+        try:
+            resp = await litellm.acompletion(**call_kwargs)
+            break
+        except Exception as exc:  # noqa: BLE001 —— 分类后要么重试、要么包成 LLMCallError
+            kind = classify_failure(exc)
+            attempt_elapsed = time.perf_counter() - attempt_started
+            retryable = (
+                kind == "transient"                       # 只重试"坏"
+                and attempt_elapsed < settings.llm_fastfail_within_s  # 且它确实是"秒级失败"
+                and attempt < max_attempts
+            )
+            if retryable:
+                # 留痕：否则"重试救回来的一次"在日志里完全看不见，
+                # 下次有人看到延迟抬高会找不到原因。
+                audit_err("llm_retry", provider=settings.llm_provider,
+                          model=settings.llm_model, kind=kind, attempt=attempt,
+                          attempt_elapsed_s=round(attempt_elapsed, 3))
+                logger.warning("LLM 调用快速失败（%s，%.2fs），重试 %d/%d：%s",
+                               kind, attempt_elapsed, attempt, max_attempts - 1, exc)
+                continue
+            raise LLMCallError(exc, kind, attempt,
+                               time.perf_counter() - started_at) from exc
+
+    if resp is None:  # 理论不可达（循环要么 break 要么 raise），留一道显式闸
+        raise LLMCallError(RuntimeError("LLM 调用未产生结果"), "fatal", 0,
+                           time.perf_counter() - started_at)
+
     msg = resp.choices[0].message
 
     # ⚠️ 兜底告警：本该关思考，却收到了思考内容 → 说明 provider 适配器把

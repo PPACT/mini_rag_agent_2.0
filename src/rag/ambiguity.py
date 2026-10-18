@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
-from src.config.litellm_client import complete_with_meta
+from src.config.litellm_client import LLMCallError, complete_with_meta
 from src.config.prompts import load_ambiguity_check_templates, load_ambiguity_reply_templates
 from src.config.settings import get_settings
 from src.observability.tracer import audit, audit_err
@@ -37,6 +37,18 @@ JudgeStatus = Literal["clear", "ambiguous", "unknown"]
 JUDGE_CLEAR: JudgeStatus = "clear"          # 有答案：判定跑了，判"不矛盾"
 JUDGE_AMBIGUOUS: JudgeStatus = "ambiguous"  # 无唯一答案：判定跑了，判"互相矛盾"
 JUDGE_UNKNOWN: JudgeStatus = "unknown"      # 无法判断：判定**想跑但没拿到有效结论**
+
+# ⭐ `2.0-58`：`unknown` 的**成因分类**（只用于观测与处置，⛔ 不改三态语义）。
+#   · `timeout` / `transient` / `fatal` —— 来自 `litellm_client.classify_failure`
+#     （"慢" vs "坏" vs 致命；只有 `transient` 在客户端内被重试过一次）
+#   · `unanswered`   —— 模型答了空 / 被 `max_tokens` 截断
+#   · `unparsed`     —— 模型答了，但不符合约定格式
+#   · `other`        —— 归不了类（兜底，别让它静默消失）
+# 为什么需要它：`2.0-58` 之前所有成因都记成同一个 `unknown`，
+# 于是一次"整批 unknown"到底是外部瞬时故障还是结构性缺陷**无法区分**，
+# 也就没法给出不同处置（`§1.92` / `§1.93①`）。
+FailureKind = Literal["timeout", "transient", "fatal",
+                      "unanswered", "unparsed", "other"]
 
 
 @dataclass
@@ -59,6 +71,10 @@ class AmbiguityResult:
     status: JudgeStatus = JUDGE_CLEAR
     reason: str = ""
     options: list[ClarifyOption] = field(default_factory=list)
+    # ⭐ `2.0-58`：仅当 `status == unknown` 时有值 —— 说清**是哪种没拿到**
+    # （`timeout` / `transient` / `fatal` / `unanswered` / `unparsed` / `other`）。
+    # ⛔ 不参与 `clear` / `ambiguous` 的判定，只用于观测与处置。
+    failure_kind: FailureKind | None = None
 
     @property
     def ambiguous(self) -> bool:
@@ -160,10 +176,21 @@ async def check_ambiguity(question: str, chunks: list[Chunk],
             ],
             temperature=0,  # 判定必须可复现：同一候选集应给出同一结论
         )
+    except LLMCallError as e:
+        # ⭐ `2.0-58`：**带着失败类别回来**（"慢" / "坏" / 致命）。
+        # 客户端已按类别决定过要不要重试 —— 走到这里说明**该试的都试过了**，
+        # 所以这里只负责如实记录，⛔ 不再自行重试（那会把延迟上界弄丢）。
+        audit_err("ambiguity_check_failed", question=question, kind=e.kind,
+                  attempts=e.attempts, elapsed_s=round(e.elapsed_s, 3),
+                  error=str(e.original))
+        return AmbiguityResult(status=JUDGE_UNKNOWN,
+                               reason=f"判定调用失败（{e.kind}）：{e.original}",
+                               failure_kind=e.kind)
     except Exception as e:  # noqa: BLE001
         # 调用异常 → unknown（旧实现返回"无歧义"：一次网络抖动就等于"判定通过"）
-        audit_err("ambiguity_check_failed", question=question, error=str(e))
-        return AmbiguityResult(status=JUDGE_UNKNOWN, reason=f"判定调用失败：{e}")
+        audit_err("ambiguity_check_failed", question=question, kind="other", error=str(e))
+        return AmbiguityResult(status=JUDGE_UNKNOWN,
+                               reason=f"判定调用失败：{e}", failure_kind="other")
 
     # ⭐ `2.0-59`：**只用观测** —— 调用成功才记（失败/未答也要记，
     #    否则分位数会把"失败但花了钱"的那几次悄悄丢掉）。⛔ 不影响下面任何判断。
@@ -182,12 +209,14 @@ async def check_ambiguity(question: str, chunks: list[Chunk],
         return AmbiguityResult(
             status=JUDGE_UNKNOWN,
             reason=("判定模型输出被 max_tokens 截断" if reply.truncated else "判定模型没有返回任何内容"),
+            failure_kind="unanswered",
         )
 
     result = parse_result(reply.text)
     if result.unknown:
         audit_err("ambiguity_unparsed", question=question, raw_len=len(reply.text),
                   reason=result.reason, snippet=settings.ambiguity_snippet_chars)
+        result.failure_kind = "unparsed"
     audit("ambiguity_check", question=question, status=result.status, options=len(result.options))
     return result
 

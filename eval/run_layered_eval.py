@@ -239,6 +239,10 @@ async def one_round(name: str, mode: dict, dataset, kb: str, top: int, model, se
                 "hit_source": hit_src, "answer": ans, "gen_error": err,
                 "refuse_exit": rx, "refused": refused,
                 "need_clarification": amb.ambiguous, "judge_status": amb.status,
+                # ⭐ `2.0-58`：`unknown` 的**成因**（timeout / transient / fatal /
+                #    unanswered / unparsed / other）。此前一律记成 `unknown`，
+                #    一次"整批 unknown"是外部故障还是结构性缺陷**分不出来**。
+                "judge_failure_kind": amb.failure_kind,
                 "ctx_ok": ctx_ok, "ctx_rule": ctx_rule,
                 "answer_wrong": answer_wrong, "answer_judge": answer_judge,
                 # ⭐ `2.0-59` 工程层埋点（**只观测**，⛔ 不影响上面任何判定）
@@ -378,6 +382,13 @@ def summarize(rows: list[dict], name: str) -> dict:
     print("\n  字段分布（spec §五）：")
     print("    refuse_exit  =", dict(Counter(r["refuse_exit"] for r in rows)))
     print("    judge_status =", dict(Counter(r["judge_status"] for r in rows)))
+    # ⭐ `2.0-58`：`unknown` 要报**成因**，⛔ 不能只报一个数 ——
+    #    `timeout` 是"慢"（延迟/环境），`unparsed` 是"判了但没按格式答"（模型/提示词），
+    #    两者修法完全不同。有 `unknown` 就**显式告警**：这些题的数字不可当结论用。
+    unk = Counter(r.get("judge_failure_kind") for r in rows if r["judge_status"] == "unknown")
+    if unk:
+        print(f"    ❗ judge_failure_kind = {dict(unk)}  —— **这些题判定未生效，"
+              "其 `need_clarification` / 澄清类数字不可当结论**")
     print(f"    need_clarification = {sum(1 for r in rows if r['need_clarification'])} 题"
           "   ❌ **不算拒答**（「资料打架」≠「没答案」）")
     print(f"    ctx_ok       = {sum(1 for r in rows if r['ctx_ok'])}/{len(rows)}"

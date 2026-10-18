@@ -32,6 +32,9 @@ class _StubSettings:
     llm_max_retries_judge = 2
     llm_timeout_generate = 11.0
     llm_max_retries_generate = 4
+    # `2.0-58`：应用层的"快速失败"重试（只对秒级失败生效，⛔ 不对超时）
+    llm_fastfail_retries = 1
+    llm_fastfail_within_s = 2.0
     llm_drop_params = False
 
 
@@ -94,10 +97,20 @@ def test_default_budget_is_bounded():
     最坏耗时 = timeout × (1 + max_retries)：
       判定/精排 8s × (1+0) = 8s ｜ 生成 20s × (1+1) = 40s
     （改之前：判定 60s、生成 60s × (1+3) = 180s+）
+
+    ⭐ `2.0-58` 之后判定路径多了一条**只对「坏」生效**的重试，
+    它的上界是 `within_s + timeout`（2 + 8 = 10s），**不是** `8s × (1+N)`。
     """
     s = get_settings()
     assert s.llm_timeout_judge == 8.0
-    assert s.llm_max_retries_judge == 0, "延迟敏感路径不该有重试"
+    assert s.llm_max_retries_judge == 0, (
+        "延迟敏感路径不该有**无差别**重试 —— 要放宽请改 `llm_fastfail_*`，"
+        "它只对「秒级失败」生效（`2.0-58`）"
+    )
+    # ⭐ `2.0-58`：应用层的重试也必须**有界** ——
+    #    最坏耗时 = within_s + 1 次 timeout（2 + 8 = 10s），而不是 `8s × N`。
+    assert s.llm_fastfail_retries <= 1, "只允许「坏」再试一次；再多就等于把长尾加回来了"
+    assert s.llm_fastfail_within_s <= 2.0, "超过 2s 的失败已不算「秒级失败」"
     assert s.llm_timeout_generate == 20.0
     assert s.llm_max_retries_generate == 1
     assert s.llm_max_tokens == 2048

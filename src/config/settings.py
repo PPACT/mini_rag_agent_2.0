@@ -229,6 +229,19 @@ class Settings(BaseSettings):
     llm_timeout_generate: float = 20.0    # 生成（Agent）
     llm_max_retries_generate: int = 1
 
+    # ⭐ `2.0-58`（2026-10-18）：判定路径**区分「慢」与「坏」**。
+    #   上面 `llm_max_retries_judge = 0` 挡的是"慢"——一次 8s 超时不该被重试
+    #   放大成 16s/24s。但它**顺带把"坏"也挡了**：连接被拒 / SSL 握手失败这类
+    #   **秒级就失败**的错误同样一次不试，于是一个瞬时故障 = 整批 `unknown`
+    #   （`§1.78⑤`：纯向量臂 30/50，用户各自看到一段"未验证"标注）。
+    #   ⇒ 新增的这两项**只作用于"坏"**：
+    #     · 只在异常在 `..._within_s` 内就返回时重试（即"快速失败"）；
+    #     · 超时一律不重试（它已经花掉了整份预算，重试只会放大长尾）。
+    #   最坏耗时仍是 `8s`（超时）或 `within_s + 8s = 10s`（快速失败后再撞超时），
+    #   ⛔ 不会回到旧的 `60s × 4`。
+    llm_fastfail_retries: int = 1          # 快速失败（连接/SSL/5xx）的额外尝试次数
+    llm_fastfail_within_s: float = 2.0     # 只有耗时 < 这个值的失败才算"快速失败"
+
     # `drop_params`：**默认 False = 不静默丢弃**（`2.0-41`）
     #   True 时 litellm 会把**不支持的参数静默丢掉** —— 换 provider 后
     #   `reasoning_effort="none"` 被丢掉 = **思考链复活，且不报错**（D8 踩过的那个坑）。
