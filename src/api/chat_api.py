@@ -11,6 +11,7 @@ from langgraph.errors import GraphRecursionError
 
 from src import provenance
 from src.agent.graph_builder import get_agent
+from src.agent.tool_guard import caller_scope
 from src.auth.deps import User, get_current_user
 from src.cache.redis_client import get_redis
 from src.config.prompts import load_templates
@@ -175,10 +176,13 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)) -> Chat
     #    一轮工具 ≈ 2 步，另有起止各 1 步），超限抛 `GraphRecursionError`。
     #    ⚠️ 取值来自实测（`logs/_probe_tool_rounds_2065.json`），⛔ 不是拍的。
     try:
-        result = await agent.ainvoke(
-            {"messages": [human_msg]},
-            config={"recursion_limit": settings.agent_recursion_limit},
-        )
+        # ⭐ `2.0-66`：把**调用者身份**带进工具层（`contextvar`，进程内传递）。
+        #    工具侧只做参数级校验；身份**绝不**由模型提供。
+        with caller_scope(user.name):
+            result = await agent.ainvoke(
+                {"messages": [human_msg]},
+                config={"recursion_limit": settings.agent_recursion_limit},
+            )
     except GraphRecursionError:
         # ⚠️ **必须与"真故障"分开**：都回"服务器繁忙"就是又一次静默降级。
         #    这里如实说"触到步数上限"，并且**不假装答案是完整的**。

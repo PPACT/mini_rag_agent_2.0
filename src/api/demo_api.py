@@ -19,6 +19,7 @@ from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel
 
 from src.agent.graph_builder import get_agent
+from src.agent.tool_guard import caller_scope
 from src.auth.deps import DEMO_USERS
 from src.config.prompts import load_templates
 from src.config.settings import get_settings
@@ -98,10 +99,12 @@ async def demo_ask(req: AskRequest) -> dict:
             agent = get_agent()
             # ⭐ `2.0-65`：与 `/chat` **同一条上限** —— 否则这里是个绕过口
             #    （`/demo` 也跑同一个 ReAct agent，同样能被拖进工具循环）。
-            result = await agent.ainvoke(
-                {"messages": [HumanMessage(content=human_tpl.format(context=ctx, question=req.question))]},
-                config={"recursion_limit": settings.agent_recursion_limit},
-            )
+            # ⭐ `2.0-66`：身份同样要带进去（`/demo` 也是工具的一条入口）。
+            with caller_scope(user.name):
+                result = await agent.ainvoke(
+                    {"messages": [HumanMessage(content=human_tpl.format(context=ctx, question=req.question))]},
+                    config={"recursion_limit": settings.agent_recursion_limit},
+                )
             answer = str(result["messages"][-1].content)
             if not answer.strip():
                 # 与 /chat 一致（P0-4）：空答案**显式化**，不把空白当正常答案返回

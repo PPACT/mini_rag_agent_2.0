@@ -7,6 +7,8 @@ from pathlib import Path
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.sessions import StdioConnection
 
+from src.agent.tool_guard import guard_tool
+
 _MOCK_SERVER = Path(__file__).resolve().parent / "mcp_mock_server.py"
 
 _client: MultiServerMCPClient | None = None
@@ -33,7 +35,12 @@ async def close_mcp() -> None:
 
 
 async def get_tools() -> list:
-    """返回 MCP 工具列表（LangChain 工具）。"""
+    """返回 MCP 工具列表（LangChain 工具）。
+
+    ⭐ `2.0-66`：**每个工具都过一遍 `guard_tool`** —— 身份由本进程注入，
+    ⛔ 不让模型参与。⚠️ 包装在此处（而不是调用点）：只要还有别的调用点，
+    逐个记得包就等于**总有一天会漏一个**。
+    """
     if _client is None:
         raise RuntimeError("MCP 客户端未初始化")
-    return await _client.get_tools()
+    return [guard_tool(t) for t in await _client.get_tools()]
