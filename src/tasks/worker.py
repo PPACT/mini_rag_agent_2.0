@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import logging
 
+from arq import cron
 from arq.connections import RedisSettings
 
 from src.config.settings import get_settings
 from src.tasks import document_task
+from src.tasks.maintenance import cleanup_expired_staged
 
 # ⚠️ **worker 也要配 logging** —— `src/main.py` 里那份只对 API 进程生效。
 # 不配的后果：默认级别是 WARNING ⇒ `audit()`（`logger.info`）**静默消失**。
@@ -28,6 +30,8 @@ class WorkerSettings:
     """worker 配置。启动：`python -m arq src.tasks.worker.WorkerSettings`（项目根目录下）。"""
 
     functions = [document_task.process_document]
+    # `2.0-71`：每小时清一次过期 staged（:17 —— ⛔ 不卡整点，避开所有人的定时任务）
+    cron_jobs = [cron(cleanup_expired_staged, minute=17)]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     on_startup = startup
     on_shutdown = shutdown
