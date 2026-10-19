@@ -44,7 +44,7 @@ EVAL_SECRET_LEVEL = 3
 _KNOWN_SUFFIXES = frozenset(f".{e}" for e in supported_extensions())
 
 # ② **采集范围**（"本批要灌哪些"）：**显式白名单，随语料走**。
-#    默认两目录里只有 .md/.txt ⇒ 本表不改变默认行为；它的意义是 `--dir docs/local/corpus` 时能收真实语料。
+#    默认两目录里只有 .md/.txt ⇒ 本表不改变默认行为；它的意义是 `--dir <corpus-dir>` 时能收真实语料。
 #    ⚠️ `.html` 自 `2.0-40` 起能解析；仍在表里 ⇒ 真解析失败会进失败清单，不藏。
 _COLLECT_SUFFIXES = (".md", ".txt", ".pdf", ".docx", ".xlsx", ".pptx", ".csv", ".py", ".html")
 
@@ -70,7 +70,7 @@ def collect_files(exclude_dept: bool, dirs: list[Path] | None = None) -> list[Pa
     """收集语料文件。`exclude_dept=True` 时剔除部门变体（得到「干净语料」）。
 
     `dirs` 不给 = 默认那两份合成语料目录（**行为不变**）；
-    给了就用它 —— 例如 `--dir docs/local/corpus` 灌真实语料（`2.0-47`）。
+    给了就用它 —— 例如 `--dir <corpus-dir>` 灌真实语料（`2.0-47`）。
     """
     files: list[Path] = []
     for d in (dirs if dirs is not None else [CORPUS_DIR, SYNTH_DIR]):

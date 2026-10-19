@@ -25,7 +25,7 @@
 指纹一致 ⇔ 没有任何块需要重嵌 ⇔ **构建可复现**。
 
 用法：
-    python eval/check_build_reproducible.py --runs 5 --kb stress --dir docs/local/corpus
+    python eval/check_build_reproducible.py --runs 5 --kb stress --dir <corpus-dir>
 """
 from __future__ import annotations
 

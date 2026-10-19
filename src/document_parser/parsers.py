@@ -35,7 +35,7 @@ def _table_block(rows: list[list[str]], caption: str | None, page: int | None = 
         text=render_nl(rows, caption=caption),
         page=page,
         raw_table=rows_to_markdown(rows),
-        # 「不确定时宁可判复杂」：任一判据为真即复杂（失败模式不对称，见交流区 §1.27）
+        # 「不确定时宁可判复杂」：任一判据为真即复杂（失败模式不对称，见内部评审记录 §1.27）
         table_complex=complex_hint or is_complex(rows),
         meta=meta,
     )
@@ -108,7 +108,7 @@ _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 def _docx_table_has_merges(table) -> bool:
     """查 `gridSpan`（横向合并）与 `vMerge`（纵向合并）—— **结构性事实**，不是启发式。
 
-    ⚠️ **为什么不看文本**（2026-09-30 实测，交流区 §1.27 核对点 2）：
+    ⚠️ **为什么不看文本**（2026-09-30 实测，内部评审记录 §1.27 核对点 2）：
 
     一个首行"差旅标准"横跨 2 列的表，python-docx 读出来是
     `['差旅标准', '差旅标准', '备注']` —— 它把合并单元格的文本**重复**到每个被并的格里。
@@ -143,7 +143,7 @@ def _is_heading(paragraph) -> bool:
 def _is_heading_bold(paragraph) -> bool:
     """`2.0-48` 候选判据：**整段显式加粗**（`run.bold is True`）。
 
-    ⚠️ **口径**（文档侧 `交流区 §1.40` 裁定）：
+    ⚠️ **口径**（文档侧 `内部评审记录 §1.40` 裁定）：
       · ✅ 只认 `run.bold` —— **显式布尔属性**，文档里直接写着
       · ⛔ **不认字号**：那要靠"正文基准"，而基准是**统计推断**，随语料变
       · ⛔ **不写 `OR`**（既然两信号共线，就没理由把推断引进来）
@@ -161,12 +161,12 @@ def heading_rule_style_or_bold(paragraph) -> bool:
 
     ⚠️ **为什么要 `or` 上样式判据**：旧判据（`Heading`/`标题` 样式名）是 ✅ 事实、
     已经在用，**不能被顶掉** —— 否则语料里那 5 个样式标题会**倒退**。
-    裁定里"不写 OR"指的是**不 OR 字号**，不是不 OR 已认定的事实（`交流区 §1.40①`）。
+    裁定里"不写 OR"指的是**不 OR 字号**，不是不 OR 已认定的事实（`内部评审记录 §1.40①`）。
 
     ⚠️ **这是唯一一处判据实现**：`parse_docx` 的默认、`shadow` 探针、测试**共用它**
     （避免"同一事实两个来源"→ 静默漂移）。
 
-    📌 `交流区 §1.42②` 裁定 **开** —— 依据：`shadow` 实测**重嵌只 6 块**
+    📌 `内部评审记录 §1.42②` 裁定 **开** —— 依据：`shadow` 实测**重嵌只 6 块**
     （能碰到 `content` 的只有"给紧邻标题的表格补 caption"一条路），
     而 `title` 只进 `title` 列、`content_tsv` 不算它 → **章节变多是纯增益**。
     """
@@ -186,7 +186,7 @@ def parse_docx(path: str,
       塞进 `warnings` 会让那一列失去区分度（实测 21/21 个文件都 ≥1 条警告）。
 
     ⚠️ `heading_rule` **默认 = `heading_rule_style_or_bold`**（`2.0-48` 开启后，
-    `交流区 §1.42`）。要复现**旧行为**（只认样式名）需**显式**传 `_is_heading` ——
+    `内部评审记录 §1.42`）。要复现**旧行为**（只认样式名）需**显式**传 `_is_heading` ——
     `shadow` 探针正是靠这一对做 A/B（`eval/shadow_bold_heading.py`）。
     """
     import docx
@@ -405,7 +405,7 @@ def parse_html(path: str) -> ParsedDoc:
     📌 **本单口径**（`2.0-40` 取路 A）：**只解决"页面进得来"**，
     ⛔ **不等于"清洗做完了"**（`CLN-*` 规则族归 `2.0-5`，另议）。
 
-    ⚠️ **参数是实测选的，不是抄默认值**（实测详见 `交流区 §1.126`）：
+    ⚠️ **参数是实测选的，不是抄默认值**（实测详见 `内部评审记录 §1.126`）：
     - `favor_precision=True` —— **唯一真能去掉导航的档位**：同一条 `<div class=nav>`
       在 默认 / `favor_recall` / `include_formatting` 下**全部漏进正文**，只有它不漏；
       且"纯导航页"在它下面**提取不出正文**（⇒ 显式失败，见下）。

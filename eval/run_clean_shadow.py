@@ -1,15 +1,15 @@
 """`2.0-5` shadow 跑：**只报告、不动库**。
 
 用法：
-    python eval/run_clean_shadow.py --dir docs/local/corpus
-    python eval/run_clean_shadow.py --dir docs/local/corpus --json logs/x.json
+    python eval/run_clean_shadow.py --dir <corpus-dir>
+    python eval/run_clean_shadow.py --dir <corpus-dir> --json logs/x.json
 
 产物：
     终端 = **汇总表**（按规则：命中块数 / 命中次数 / 改动字符数 / 涉及文件数）
     文件 = `logs/clean_shadow_<日期>.json`（每条命中带**改前样例**，供人工判误伤）
 
 ⚠️ **它不写库、不改 `content`** —— 是否真删，等这份报告 + 抽样判过再定
-（`改进计划.md 2.0-5`：漏洗可发现，**误洗不可发现** ⇒ shadow 先行）。
+（`内部工单 2.0-5`：漏洗可发现，**误洗不可发现** ⇒ shadow 先行）。
 """
 from __future__ import annotations
 

@@ -18,7 +18,7 @@
 | **每份文档实际生效的解析器** | 路由 vs 实际（协议 P-2） |
 
 用法：
-    python eval/l0_report.py                        # 默认扫 docs/local/corpus
+    python eval/l0_report.py                        # 默认扫 <corpus-dir>
     python eval/l0_report.py --dir eval/corpus      # 换目录
     python eval/l0_report.py --no-detail            # 不打印逐文件表
 """

@@ -1,6 +1,6 @@
 """`2.0-48` **先量** —— Word 里「格式上是标题、却没被认成 `heading`」的段落有多少。
 
-## 为什么要先量（`改进计划.md` 阶段 0-f 候选 c / `交流区 §1.37`）
+## 为什么要先量（`内部工单` 阶段 0-f 候选 c / `内部评审记录 §1.37`）
 
 `2.0-46` 实测极短块 **9 → 7**（`bca4156`），**漏判 7/9**。
 根因：`三、成本与费用` 这类段落**没被 Word 样式标成 `Heading`** →
@@ -35,7 +35,7 @@
 
 用法：
     python eval/probe_docx_heading.py
-    python eval/probe_docx_heading.py --dir docs/local/corpus --json logs/probe_docx_heading.json
+    python eval/probe_docx_heading.py --dir <corpus-dir> --json logs/probe_docx_heading.json
 """
 from __future__ import annotations
 

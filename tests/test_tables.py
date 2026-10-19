@@ -1,6 +1,6 @@
 """表格处理单测 —— 其中 `test_numbers_survive_rendering` 就是 **2.0-1 的验收闸**。
 
-口径（交流区 §1.24 Q5）：`content` = 自然语言版（进向量），`raw_table` = 原表（只进词法）。
+口径（内部评审记录 §1.24 Q5）：`content` = 自然语言版（进向量），`raw_table` = 原表（只进词法）。
 **验收**：原表里的**每一个数值**都必须在自然语言版里被找到。
 """
 from __future__ import annotations

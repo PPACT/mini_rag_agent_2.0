@@ -10,7 +10,7 @@
 
 | 文件/目录 | 说明 |
 |---|---|
-| `docs/local/corpus/` | **私有语料**（评测目标文档）—— `.gitignore` 按目录规则忽略，⛔ 不进公开仓库；代码里别硬编码，用 `eval/paths.py` 的 `CORPUS_DIR` |
+| `<corpus-dir>/` | **私有语料**（评测目标文档）—— `.gitignore` 按目录规则忽略，⛔ 不进公开仓库；代码里别硬编码，用 `eval/paths.py` 的 `CORPUS_DIR` |
 | `corpus_synth/` | **合成语料**（gitignore，由脚本生成）：624 篇部门变体 + 86 篇不同主题文档 |
 | `local/` | **语料派生的评测集**（gitignore，与 `corpus_synth/` 同理 fail-closed）：`dataset_excel_numeric.jsonl` / `dataset_pdf_numeric.jsonl` / `dataset_layered_50q.jsonl` / `cfqa/` —— ⚠️ **题面与 `answer_spans` 抄自私有语料或外部数据集** ⇒ ⛔ 不入库；跑这些评测**先确认 `eval/local/` 里的原件在**（缺了脚本会显式报错） |
 | `dataset_clear.jsonl` | **清晰题**（80 条）：答案在整个语料中唯一 |

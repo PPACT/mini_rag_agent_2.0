@@ -14,7 +14,7 @@
 **而评估是另一条命令**，它不会告诉你"库里少了谁"。**这就是静默的来源。**
 
 用法（**评估前跑**）：
-    python eval/check_ingest_complete.py --kb stress --dir docs/local/corpus
+    python eval/check_ingest_complete.py --kb stress --dir <corpus-dir>
 退出码非 0 = **不完整**，别拿它做评估。
 """
 from __future__ import annotations
@@ -45,7 +45,7 @@ def compare(corpus: set[str], in_db: set[str]) -> dict[str, list[str]]:
 def split_by_routing(files: list[Path]) -> tuple[set[str], set[str]]:
     """把语料分成「**路由认得的**」与「**路由明确拒收的**」。
 
-    ⭐ **这一步不做，闸就是废的**：`docs/local/corpus` 里有一份 `.html`，
+    ⭐ **这一步不做，闸就是废的**：`<corpus-dir>` 里有一份 `.html`，
     而 `routing` **明确拒收 HTML**（`2.0-40` 未接入）——
     不把它摘出去，这个闸**每次都报"不完整"** → **永远红 = 和永远绿一样没用**。
 
@@ -69,7 +69,7 @@ async def check(kb: str, directory: str) -> dict:
     """闸的核心 —— **抽出来是给别的脚本复用的**（评估前必须过）。
 
     ⚠️ 为什么不只是"文档里写一句'评估前记得跑"：
-    **记在文档里的规矩拦不住遗忘**（本项目已踩过：`优化方案.md` 早写了 `use_hybrid` 的坑，
+    **记在文档里的规矩拦不住遗忘**（本项目已踩过：`内部评测口径` 早写了 `use_hybrid` 的坑，
     照样又踩一次）→ **让评估脚本自己调它**，才真的忘不掉。
     """
     from eval.ingest import collect_files

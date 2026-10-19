@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     embedding_batch_size: int = 16
 
     # PostgreSQL + pgvector —— **两库分离**：真实业务库 / 压测库
-    # 背景：合成评测语料含 624 篇"近重复干扰"，与真实文档同库会**淹没真实答案**（详见交流区 §1.6）。
+    # 背景：合成评测语料含 624 篇"近重复干扰"，与真实文档同库会**淹没真实答案**（详见内部评审记录 §1.6）。
     # kb 取值见 `src/db/kb.py`，**必填、无默认**（有默认就会"忘传 → 静默落真实库"）。
     # 端口与 docker-compose 保持一致（15432 真实 / 15433 压测）。
     database_url: str = "postgresql://rag:rag_demo_pwd@localhost:15432/rag_real"
@@ -227,7 +227,7 @@ class Settings(BaseSettings):
     ambiguity_check_enabled: bool = True
     # ⚠️ `ambiguity_source_threshold` 已于 2026-09-28 **移除**（P1-3 移除门控）。
     #    它原本驱动「来源分散度 ≥N 才判定」那道门控，而数据判该门控**无效且有害**
-    #    （通过率 98% 省不下调用，还制造 2~7 例漏报，见 `优化方案.md` §3 P1-3）。
+    #    （通过率 98% 省不下调用，还制造 2~7 例漏报，见 `内部评测口径` §3 P1-3）。
     #    ⚠️ **不要加回来**：留下一个"生产不读的配置项"正是本项目最怕的
     #    「配置值不生效」陷阱 —— 改了它但毫无效果，且不报错。
     #    门控的**复现对照**（eval 侧）用各自脚本里的局部常量，不再走全局配置。

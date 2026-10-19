@@ -1,6 +1,6 @@
 """验证：换成 `openai/` 适配器后，`reasoning_effort="none"`（关思考）是否仍生效。
 
-背景（`docs/local/交流区/交流区.md` §1.12 风险①）：
+背景（`内部评审记录` §1.12 风险①）：
 判定与精排靠 `reasoning_effort="none"` 关掉思考链。**该参数是 DeepSeek 语义**。
 若把 litellm 的 provider 前缀从 `deepseek/` 换成通用的 `openai/`，
 litellm 可能因 `drop_params=True` **静默丢弃它** → 思考链悄悄复活

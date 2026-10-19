@@ -22,7 +22,7 @@
 ## ⚠️ 评测集**不入库** —— 它的内容就是真实语料原文
 
 落点：`eval/local/dataset_pdf_numeric.jsonl`（`eval/local/` 已 gitignore）。
-**协议 §12.5：语料绝不外传**；且 `docs/local/corpus/` 本身不入库 →
+**协议 §12.5：语料绝不外传**；且 `<corpus-dir>/` 本身不入库 →
 **新克隆跑不了这个评测**，提交评测集换不来可复现性，只换来泄露。
 
 每行一题（JSONL）：

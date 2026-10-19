@@ -1,6 +1,6 @@
 """`2.0-29` 复核：PDF 抽文本时，**数字和它的标签是不是被拆散了**。
 
-## 背景（`改进计划.md` §2.0-29）
+## 背景（`内部工单` §2.0-29）
 
 参考文档点名「**不要直接用 `pdfplumber` 按物理顺序抽文本**」，并推荐 MinerU / Docling 等**重依赖**。
 ⚠️ 计划里写明：**不要照单全收，先用真实语料证明必要性**（`P-4` / `P-5`）。
@@ -17,7 +17,7 @@
 
 用法：
     python eval/probe_pdf_text_order.py
-    python eval/probe_pdf_text_order.py --dir docs/local/corpus --json logs/pdf_text_order.json
+    python eval/probe_pdf_text_order.py --dir <corpus-dir> --json logs/pdf_text_order.json
 """
 from __future__ import annotations
 

@@ -83,7 +83,7 @@ def _cache_key(question: str, department: str, secret_level: int, top_k: int, kb
          # 而且不报错**（同类已踩过：`开发记录.md` §4.1 第 6 条）。
          # ⚠️ 四个**都**要：解析 / 切块 / 清洗 / 嵌入，**任一变都会让检索结果变**。
          #    （`§1.32` 只列了后三个；`parser_version` 是我加的 —— 改解析器一样会让块变，
-         #     漏了它这里就留一个和它要防的洞一模一样的洞。已报交流区。）
+         #     漏了它这里就留一个和它要防的洞一模一样的洞。已报内部评审记录。）
          # ⚠️ 从 `provenance` **按属性读**（不是 `from … import X`）——
          #    这样它是"当前的"值，测试也能 monkeypatch 它。
          "pv": provenance.PARSER_VERSION,
