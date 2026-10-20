@@ -2,14 +2,15 @@
 
 判据（文档侧 `提醒 #34`）：
 1. **未设置 ⇒ 显式报错**（⛔ 不回落默认路径、⛔ 不静默空跑）；
-2. **代码里看不出任何具体目录结构**（这是个**人读代码**的要求，不是 grep 的要求）。
+2. **代码里看不出任何具体目录结构** —— 这条**由提交前的全树扫描**保障，
+   ⛔ 不写成 committed test：想在测试里断言"某串不出现"，就得先把那串写进测试源码，
+   等于自己泄一次（测试文件也是公开的）。
 
 ⚠️ 为什么这条要有测试：把默认路径删掉之后，最容易的"修复"就是**加回一个猜的路径**——
 那样测试会全绿、评测却可能安静地跑在**空目录或错的目录**上。
 """
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 
 import pytest
@@ -58,13 +59,6 @@ def test_missing_directory_is_an_error(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError) as ei:
         paths._resolve_corpus_dir()
     assert "不存在" in str(ei.value)
-
-
-def test_source_contains_no_hardcoded_directory():
-    """⭐ 人读代码也看不出内部目录结构（`W-17` 的补口就是这条）。"""
-    src = inspect.getsource(paths)
-    for needle in ('"local"', "'local'", '"corpus"', "'corpus'", "docs/local"):
-        assert needle not in src, f"`eval/paths.py` 里仍写死了目录成分：{needle}"
 
 
 def test_corpus_dir_is_a_real_path_in_tests():
