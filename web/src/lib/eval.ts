@@ -9,7 +9,7 @@
  *    （同 `src/ui/logs_reader.py` 的口径；那个文件是**对照组**，不是我的代码）。
  *
  * ⚠️ **数字口径**：`R@K` / 拒答 / `gen_error_n` 一律**直接读产物里的 `summary`**，
- *    前端**不自己重算**（重算 = 第二个实现 → 会跟文档侧的报表打架）。
+ *    前端**不自己重算**（重算 = 第二个实现 → 会跟另一份报表打架）。
  *    唯一例外是 `AllHit@3` —— 产物里没有，见 `allHit()` 的说明。
  */
 import type { LayeredArtifact, LayeredRow } from './types'

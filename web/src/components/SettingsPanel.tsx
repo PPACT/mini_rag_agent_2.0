@@ -1,7 +1,7 @@
 /**
  * 连接设置（前端需求 §2.1）——后端地址 ＋ Token ＋ 请求参数。
  *
- * ⚠️ **Token 必须隐藏输入**；⛔ 且**不写进源码**（`R-5`）——只存本机 `localStorage`，
+ * ⚠️ **Token 必须隐藏输入**；⛔ 且**不写进源码**（脱敏规则）——只存本机 `localStorage`，
  *    或由 `web/.env.local` 的 `VITE_DEMO_TOKEN` 预填。
  */
 import { CheckCircle2, Eye, EyeOff, RotateCcw, XCircle } from 'lucide-react'
