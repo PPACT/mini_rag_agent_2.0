@@ -16,7 +16,7 @@ def _env_models_dir() -> Path:
 
     ⛔ **这里不出现任何本机绝对路径** —— 用 `sys.prefix`（当前解释器所属环境的根）
     相对定位，于是它在**任何机器上**都指向"那个环境自己的 `models/` 目录"，
-    **路径可移植、也不把机器信息写进 tracked 文件**（`R-5`）。
+    **路径可移植、也不把机器信息写进 tracked 文件**（提交前须脱敏）。
     """
     import sys
 
@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     embedding_batch_size: int = 16
 
     # PostgreSQL + pgvector —— **两库分离**：真实业务库 / 压测库
-    # 背景：合成评测语料含 624 篇"近重复干扰"，与真实文档同库会**淹没真实答案**（详见内部评审记录 §1.6）。
+    # 背景：合成评测语料含 624 篇"近重复干扰"，与真实文档同库会**淹没真实答案**（详见两库分离口径）。
     # kb 取值见 `src/db/kb.py`，**必填、无默认**（有默认就会"忘传 → 静默落真实库"）。
     # 端口与 docker-compose 保持一致（15432 真实 / 15433 压测）。
     database_url: str = "postgresql://rag:rag_demo_pwd@localhost:15432/rag_real"
@@ -160,7 +160,7 @@ class Settings(BaseSettings):
     # （D11，不改变默认值）。本地模型未下载 / 显存不足时也可显式切 llm。
     rerank_backend: str = "local"
     # ⭐ 模型解析：**优先用 conda 环境里的本地副本**（用户 2026-10-11 裁：环境资源放环境里）。
-    # ⛔ **绝不把本机绝对路径写在这里** —— 本文件是 tracked 的，绝对路径 = 机器信息（`R-5`）。
+    # ⛔ **绝不把本机绝对路径写在这里** —— 本文件是 tracked 的，绝对路径 = 机器信息（提交前须脱敏）。
     # ⇒ 用 `sys.prefix`（**当前环境根**）相对定位：在任何机器上都指向"那个环境自己的
     #    `models/` 目录"，**路径可移植**；找不到才回落到 HF 模型名。
     rerank_local_model: str = Field(default_factory=_default_rerank_model)
@@ -197,13 +197,13 @@ class Settings(BaseSettings):
     # 提到 100 仅多 ~3ms 即可恢复满召回 —— 默认值会静默降低检索质量。
     hnsw_ef_search: int = 100
 
-    # ⭐ `提醒 #30`（`2.0-72` 的检索加权部分）：`authority` 的**近分 tie-break**。
+    # ⭐ `2.0-72` 的检索加权部分：`authority` 的**近分 tie-break**。
     #
-    #   口径（`§1.138③`，⛔ 不改）：**只在两条候选的精排分差 ≤ ε 时**让 `authority`
+    #   口径（⛔ 不改）：**只在两条候选的精排分差 ≤ ε 时**让 `authority`
     #   高者优先；⛔ **不做乘法加权**（乘数要调参，而 23 份语料上没有区分度 —— `P-4`）。
     #
     #   ⚠️ **默认关闭**：没跑过开/关两臂对照的排序改动**不许默认生效**。
-    #      要打开就显式设 `AUTHORITY_TIEBREAK_ENABLED=true`（`提醒 #30③` 的两臂实验就是这么做的）。
+    #      要打开就显式设 `AUTHORITY_TIEBREAK_ENABLED=true`（两臂实验就是这么做的）。
     #   ⚠️ ε 的来历见 `logs/authority_tiebreak_epsilon_20261018.json` —— 由**实测分差分布**定，
     #      ⛔ 不是拍的。调到别的值请重新测一次分布，别凭感觉。
     authority_tiebreak_enabled: bool = False
@@ -258,7 +258,7 @@ class Settings(BaseSettings):
     #   上面 `llm_max_retries_judge = 0` 挡的是"慢"——一次 8s 超时不该被重试
     #   放大成 16s/24s。但它**顺带把"坏"也挡了**：连接被拒 / SSL 握手失败这类
     #   **秒级就失败**的错误同样一次不试，于是一个瞬时故障 = 整批 `unknown`
-    #   （`§1.78⑤`：纯向量臂 30/50，用户各自看到一段"未验证"标注）。
+    #   （纯向量臂 30/50 时，各自会看到一段"未验证"标注）。
     #   ⇒ 新增的这两项**只作用于"坏"**：
     #     · 只在异常在 `..._within_s` 内就返回时重试（即"快速失败"）；
     #     · 超时一律不重试（它已经花掉了整份预算，重试只会放大长尾）。

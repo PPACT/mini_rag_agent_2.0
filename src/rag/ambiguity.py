@@ -46,7 +46,7 @@ JUDGE_UNKNOWN: JudgeStatus = "unknown"      # 无法判断：判定**想跑但�
 #   · `other`        —— 归不了类（兜底，别让它静默消失）
 # 为什么需要它：`2.0-58` 之前所有成因都记成同一个 `unknown`，
 # 于是一次"整批 unknown"到底是外部瞬时故障还是结构性缺陷**无法区分**，
-# 也就没法给出不同处置（`§1.92` / `§1.93①`）。
+# 也就没法给出不同处置。
 FailureKind = Literal["timeout", "transient", "fatal",
                       "unanswered", "unparsed", "other"]
 

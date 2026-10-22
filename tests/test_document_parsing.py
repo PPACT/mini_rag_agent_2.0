@@ -423,7 +423,7 @@ def test_same_content_in_txt_is_not_a_code_block(tmp_path):
     assert "code" not in load_document(str(p)).kind_counts()
 
 
-# ---------------------------------------------------------------- HTML（2.0-40 / 提醒 #24）
+# ---------------------------------------------------------------- HTML（2.0-40）
 
 
 REIMBURSE_NAV = ["首页", "产品中心", "解决方案", "新闻动态", "关于我们", "联系方式"]

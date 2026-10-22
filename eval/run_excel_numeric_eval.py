@@ -1,12 +1,12 @@
 """`2.0-47` —— Excel 表格块**偏长**会不会影响召回？**只出数字，不改参数**。
 
-## 为什么（`内部评审记录 §1.37` 判定 / `§1.43` 出题）
+## 为什么
 
-`_XLSX_ROWS_PER_BLOCK = 60` 被怀疑对**宽表**太大 → 文档侧裁定 **先量再改**：
+`_XLSX_ROWS_PER_BLOCK = 60` 被怀疑对**宽表**太大 → 裁定是 **先量再改**：
 「**R@K 好 → 『偏长』不是问题，本项关闭；R@K 差 → 再决定**」。
 ⚠️ **不许跳过 L1 直接调参**（`2.0-39` 的门槛）。
 
-## 三项输出（`§1.43⑤`）
+## 三项输出
 
 | # | 量什么 | 来源 |
 |---|---|---|
@@ -14,7 +14,7 @@
 | ② | 超长块占比（> 2 × chunk_size） | 纯 CPU |
 | ③ | **R@1 / R@3 / R@5** | 需已灌库 |
 
-## ⚠️ 评分口径（`§1.43③`，**先定死再看数**）
+## ⚠️ 评分口径（**先定死再看数**）
 
 - **看召回** —— 「出处」那一块**在不在 top-K**；**⛔ 不是看生成的答案对不对**。
 - **命中** = 来自**期望文件** 且 该块**包含这道题的全部 `answer_spans`**
@@ -128,7 +128,7 @@ def selfcheck_spans(dataset: list[dict]) -> list[str]:
 def hit_rank(chunks: list[Chunk], spans: list[str], source: str) -> int | None:
     """首个命中的切片排名（1-based）；未命中 → None。
 
-    命中 = 来自**期望文件** 且 **全部** span 都在 `content` 里（`§1.43③` 的口径）。
+    命中 = 来自**期望文件** 且 **全部** span 都在 `content` 里（既定口径）。
     """
     for rank, c in enumerate(chunks, start=1):
         if c.source_file == source and all(sp in (c.content or "") for sp in spans):

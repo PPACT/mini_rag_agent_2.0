@@ -27,11 +27,11 @@ class BaseReranker(ABC):
                           chunks: list[Chunk]) -> list[tuple[Chunk, float | None]]:
         """按与 query 的相关性排序，返回**全量**候选 ＋ 分数。
 
-        ⭐ `提醒 #30`：上层需要"**相邻两条差多少分**"才能做 `authority` 近分 tie-break，
+        ⭐ 上层需要"**相邻两条差多少分**"才能做 `authority` 近分 tie-break，
         而只返回排好序的列表是**拿不到分差**的。所以接口改成带分数。
 
         ⚠️ 分数可能是 `None`：LLM 精排只给**顺序**、不给可比的数值分
-        （`§1.138③` 的 ε 依赖"分差"，在那种后端下 tie-break **不生效**，须显式说明，
+        （ε 依赖"分差"，在那种后端下 tie-break **不生效**，须显式说明，
         ⛔ 不要用"名次差"冒充"分差"）。
         """
         raise NotImplementedError

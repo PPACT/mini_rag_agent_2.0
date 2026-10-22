@@ -1,6 +1,6 @@
 """清洗规则（`2.0-5`）：**先出报告，再决定动不动库**。
 
-取向（`内部工单` → `2.0-5`）：漏洗 → 噪声进库（**可发现**）；误洗 → **静默丢信息**（不可发现）
+取向（`2.0-5`）：漏洗 → 噪声进库（**可发现**）；误洗 → **静默丢信息**（不可发现）
 ⇒ **宁可少洗，不可错洗**。所以本模块的产物是 `CleanReport`（每条规则命中多少、样例是什么），
 由 `eval/run_clean_shadow.py` 出 shadow 报告；⛔ **解析 / 入库路径不会自动删文本**。
 
@@ -9,7 +9,7 @@
 
 ⚠️ **只 `flag` 不删的三类**（判据有假阳性，删了 = 静默丢信息）：
 `CLN-009` 去广告 · `CLN-022` 去乱码 · `INJ-002` 注入短语 · **`CLN-036` 疑似孤立页码**。
-⚠️ **`INJ-001` 零宽字符归「删」类**（2026-10-17 文档侧改判：只 flag **不提供任何防护** —— LLM 仍看得见它）。
+⚠️ **`INJ-001` 零宽字符归「删」类**（2026-10-17 改判：只 flag **不提供任何防护** —— LLM 仍看得见它）。
 
 📌 **源码里一律写 `\\uXXXX` 转义，⛔ 不放不可见的字面字符** —— 不可见字符改不动、也审不出来。
 """
@@ -175,7 +175,7 @@ def run_text_rules(text: str, *, is_code: bool = False, first_block: bool = Fals
              len(text) - len("\n".join(kept)), page_lines[0])
         text = "\n".join(kept)
 
-    # INJ-001 零宽字符 → **删**（2026-10-17 文档侧改判：只 flag 不提供任何防护 —— LLM 仍看得见它）
+    # INJ-001 零宽字符 → **删**（2026-10-17 改判：只 flag 不提供任何防护 —— LLM 仍看得见它）
     before_text = text
     text, n, removed = _sub_count(_ZW, "", text)
     emit("INJ-001", "remove", n, removed, before_text)
@@ -198,7 +198,7 @@ def run_text_rules(text: str, *, is_code: bool = False, first_block: bool = Fals
         assert i is not None
         emit("CLN-022", "flag", len(bad), 0, text[max(0, i.start() - 20): i.end() + 20])
 
-    # CLN-036 疑似孤立页码 —— **只 flag**（2026-10-17 文档侧裁定：不放宽 CLN-007 的删除判据）
+    # CLN-036 疑似孤立页码 —— **只 flag**（2026-10-17 裁定：不放宽 CLN-007 的删除判据）
     # 判据写细：整行仅数字 **且** 位于块首/块尾 **且** 相邻是空行 ⇒ 裸整数行在正文里很常见，宁可少删
     lines = text.split("\n")
     for idx, ln in enumerate(lines):

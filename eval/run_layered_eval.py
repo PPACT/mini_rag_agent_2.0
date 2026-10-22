@@ -8,7 +8,7 @@
 2. **纯向量 vs 混合检索+重排，差多少**
 3. 口径写死 + 可导出（`2.0-53`）
 
-## ⚠️ 三条设计原则（`§1.65⑥` 买来的教训，写在这里免得再犯）
+## ⚠️ 三条设计原则（踩过的坑，写在这里免得再犯）
 
 1. **每个指标先证明它有区分度** —— 恒为常数的不叫指标
 2. **不许自我实现** —— 自检**不许保证指标取值**（自检只验"anchor 在库里找得到"，那是**定位器**要求，
@@ -80,7 +80,7 @@ from src.rag.retriever import retrieve  # noqa: E402
 DATASET = Path(__file__).resolve().parent / "local" / "dataset_layered_50q.jsonl"
 
 # ⚠️ 每个臂都把**三个开关显式给全**（§四 的静默陷阱）；名字即产物里的列名。
-# ⭐ `2.0-49` **四臂**（`提醒 #14` 第 1 批）：把「混合」与「重排」**拆开** ——
+# ⭐ `2.0-49` **四臂**：把「混合」与「重排」**拆开** ——
 #    原来那两轮**差了整整两个变量**（`hybrid` 与 `rerank` 同开同关），
 #    所以「`R@1` 升 / `R@3` 降」**归因不了**（`P-7`：一次只改一个变量）。
 ROUNDS: dict[str, dict] = {
@@ -106,7 +106,7 @@ CONCURRENCY = 5
 
 # ⭐ `2.0-60` 诊断：**检索**的并发闸。⛔ **0 = 现状（全并发，与历史产物一致）**。
 # ⚠️ 为什么单列它：下面那个 `CONCURRENCY=5` **只卡生成（`ask`）**，**不卡检索** ——
-#    而检索是**整批 `asyncio.gather` 全并发**的，分段耗时里混着**排队时间**（`§1.111`）。
+#    而检索是**整批 `asyncio.gather` 全并发**的，分段耗时里混着**排队时间**。
 #    显式传 N>0 才能把"排队"和"服务"分开量。
 RETRIEVE_CONCURRENCY = 0
 RETRIES = 3
@@ -183,7 +183,7 @@ async def ask(model, sem, system: str, human: str, ctx: str, q: str,
 async def one_round(name: str, mode: dict, dataset, kb: str, top: int, model, sem, system, human):
     async def one(row) -> dict:
         # ⭐ 传 `trace` 进去（传引用）—— 拿**重排之前**的粗排候选池。
-        #    这是 `提醒 #15` H1/H2 的判据：anchor 块**在不在**那 20 条里。
+        #    这是 H1/H2 的判据：anchor 块**在不在**那 20 条里。
         trace: dict = {}
         t0 = time.perf_counter()
         _, chunks = await retrieve(row["question"], EVAL_DEPARTMENT, EVAL_SECRET_LEVEL,
@@ -234,7 +234,7 @@ async def one_round(name: str, mode: dict, dataset, kb: str, top: int, model, se
             answer_wrong, answer_judge = (True, "auto_sentinel") if refused else (None, "manual")
 
         return {"id": row["id"], "kind": row["kind"], "rank": rank, "ranks_each": each,
-                # ⭐ `提醒 #15`：重排**之前**的池内位置 ＋ 向量分（H1/H2 的判据）
+                # ⭐ 重排**之前**的池内位置 ＋ 向量分（H1/H2 的判据）
                 "pre_rank": pre_rank, "pre_vec_score": pre_vec_score, "pool_n": len(cands),
                 "hit_source": hit_src, "answer": ans, "gen_error": err,
                 "refuse_exit": rx, "refused": refused,
@@ -362,7 +362,7 @@ def summarize(rows: list[dict], name: str) -> dict:
         cells.append(f"{hit}/{len(gradable)}")
     print(f"  {'— 合计':<10}{len(gradable):>4}" + "".join(f"{c:>12}" for c in cells))
 
-    # ⚠️ `gen_error`（生成失败）**必须剔出生成类的所有分母**（口径 `§1.79②`）：
+    # ⚠️ `gen_error`（生成失败）**必须剔出生成类的所有分母**（既定口径）：
     #    落在无答案题 → 拒答正确率**被压低**（看着更差）；落在有答案题 → 误拒率**被稀释**（看着更好）
     #    —— **两个都不是真数字。**
     gen_err_n = sum(1 for r in rows if r["refuse_exit"] == "gen_error")

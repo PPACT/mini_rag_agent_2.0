@@ -1,6 +1,6 @@
 """表格处理单测 —— 其中 `test_numbers_survive_rendering` 就是 **2.0-1 的验收闸**。
 
-口径（内部评审记录 §1.24 Q5）：`content` = 自然语言版（进向量），`raw_table` = 原表（只进词法）。
+口径：`content` = 自然语言版（进向量），`raw_table` = 原表（只进词法）。
 **验收**：原表里的**每一个数值**都必须在自然语言版里被找到。
 """
 from __future__ import annotations
@@ -45,7 +45,7 @@ def test_fidelity_holds_for_awkward_numbers():
 
 
 def test_raw_table_adds_no_unique_tokens():
-    """⭐ **可观测的健康指标**（文档侧 §1.25② 的建议，比"改注释"更进一步）。
+    """⭐ **可观测的健康指标**（既有建议，比"改注释"更进一步）。
 
     `raw_table` 给词法索引带来的**独有 token 必须为空**：
 

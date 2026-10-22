@@ -23,7 +23,7 @@ _thinking_warned = False
 # `2.0-58`：**区分「慢」与「坏」**
 # ════════════════════════════════════════════════════════════════════════
 #
-# 背景（`§1.92` 已定性）：判定路径 `8s × 0 重试` 的取舍算的是"单请求最坏延迟"，
+# 背景：判定路径 `8s × 0 重试` 的取舍算的是"单请求最坏延迟"，
 # 漏掉了另一个维度 —— **一次瞬时故障 → 一次慢窗口 → 整批 `unknown`**，
 # 代价从"一个用户等 8s"变成"**N 个用户各看到一段假标注**"。
 #
@@ -47,7 +47,7 @@ _TIMEOUT_ERRORS: tuple[type[BaseException], ...] = (
     asyncio.TimeoutError,
     TimeoutError,
 )
-# "坏"：秒级就能返回的那一类。`OSError` 覆盖 `ssl.SSLError`（`§1.92` 的 122 条 100% 是它）。
+# "坏"：秒级就能返回的那一类。`OSError` 覆盖 `ssl.SSLError`（实测 122 条 100% 是它）。
 _TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
     litellm.APIConnectionError,
     litellm.ServiceUnavailableError,

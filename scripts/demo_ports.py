@@ -12,13 +12,13 @@ from __future__ import annotations
 API_PORT = 8000
 API = f"http://127.0.0.1:{API_PORT}"
 
-# 演示界面（Streamlit —— 开发侧版，`2.0-54`）
+# 演示界面（Streamlit 版，`2.0-54`）
 UI_PORT = 8501
 UI = f"http://127.0.0.1:{UI_PORT}"
 
-# 新前端（`web/`，归**前端侧**；React ＋ Tailwind ＋ Shadcn/ui）
-# ⚠️ 取 **Vite 默认端口** —— 前端侧**不用额外配**，减少一处可能要改的东西。
-# 🔴 与 8501 **必须分开**：开发侧的 Streamlit 版留作对照组，两版可能同时在跑。
+# 新前端（`web/`；React ＋ Tailwind ＋ Shadcn/ui）
+# ⚠️ 取 **Vite 默认端口** —— `web/` 侧**不用额外配**，减少一处可能要改的东西。
+# 🔴 与 8501 **必须分开**：Streamlit 版留作对照组，两版可能同时在跑。
 WEB_DEV_PORT = 5173        # `npm run dev`（Vite dev server）
 WEB_PREVIEW_PORT = 4173    # `npm run preview`（构建产物本地预览）
 WEB = f"http://127.0.0.1:{WEB_DEV_PORT}"
@@ -27,13 +27,13 @@ WEB = f"http://127.0.0.1:{WEB_DEV_PORT}"
 DEMO_PAGE = f"{API}/demo"
 
 # `stop_demo.py` 要收的**全部**端口
-# ⚠️ 含 `WEB_DEV_PORT`：那是**前端侧自己起的** dev server —— 停它只是停演示，不动代码。
+# ⚠️ 含 `WEB_DEV_PORT`：那是**`web/` 自己起的** dev server —— 停它只是停演示，不动代码。
 SERVICE_PORTS = (API_PORT, UI_PORT, WEB_DEV_PORT)
 
 PORT_LABEL = {
     API_PORT: "API（FastAPI）",
-    UI_PORT: "演示界面（Streamlit · 开发侧版）",
-    WEB_DEV_PORT: "新前端（web/ · 前端侧 · Vite dev）",
+    UI_PORT: "演示界面（Streamlit 版）",
+    WEB_DEV_PORT: "新前端（web/ · Vite dev）",
 }
 
 __all__ = [

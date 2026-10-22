@@ -18,7 +18,7 @@
 那是**另一个概念**：复用它会把"**跑完了没**"和"**还算不算数**"搅成一个字段，
 将来任一方扩展都会踩到另一方。**`0001` 的 `status` 一个字不动。**
 
-⚠️ **⛔ 不动 `chunks.is_deprecated`**（文档侧点名）——
+⚠️ **⛔ 不动 `chunks.is_deprecated`**（明确要求）——
 检索热路径恒带 `c.is_deprecated = false` 硬过滤（`pg_vector.py`）。
 本轮 `is_deprecated`（**管检索过滤**）与 `content_status`（**只标记、不参与过滤**）**并存**，
 稳定之后再谈收敛。

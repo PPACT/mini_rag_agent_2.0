@@ -1,6 +1,6 @@
-"""`2.0-72` / `提醒 #30`：`authority` **近分 tie-break**（⛔ 不是乘法加权）。
+"""`2.0-72`：`authority` **近分 tie-break**（⛔ 不是乘法加权）。
 
-口径（`§1.138③`）：
+口径：
 - 只有精排分差 **≤ ε** 才让 `authority` 高者优先；分差大 ⇒ 精排说了算。
 - **默认关闭** —— 没做过两臂对照的排序改动不许默认生效。
 
@@ -72,7 +72,7 @@ def test_missing_scores_are_not_comparable():
     assert moved == 0
 
 
-# ---- 默认不生效（`§1.138③` 明确要求的一条）----
+# ---- 默认不生效（明确要求的一条）----
 
 
 def test_default_is_disabled():

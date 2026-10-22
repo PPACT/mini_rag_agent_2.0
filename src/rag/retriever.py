@@ -151,7 +151,7 @@ async def retrieve(
     authority_note = "off"
     if use_rerank and len(candidates) > top_k:
         ordered = await get_reranker(rerank_backend).score_order(question, candidates)
-        # ⭐ `提醒 #30`：`authority` **近分 tie-break**（默认关，见 settings）。
+        # ⭐ `authority` **近分 tie-break**（默认关，见 settings）。
         #    ⚠️ 必须在**截断到 top_k 之前**做 —— 只在 top_k 内部调整，就永远
         #    解决不了"制度文档被挤到第 6 名"这种真正要它解决的问题。
         if settings.authority_tiebreak_enabled:
@@ -180,7 +180,7 @@ async def retrieve(
         trace["recall_k"] = recall_k
         trace["candidates"] = candidates          # RRF 融合后的粗排候选池
         trace["final"] = chunks                   # 精排（或截断）后的最终结果
-        # ⭐ `提醒 #30`：tie-break 的**触发量**
+        # ⭐ tie-break 的**触发量**
         #    `moved` = 被移动的条数（0 = 这次没起作用，⛔ 不等于"没用"）
         #    `note`  = on / off / skipped_no_scores（后端没有可比分数时不假装跑了）
         trace["authority_tiebreak"] = {"moved": authority_moved, "note": authority_note}

@@ -87,7 +87,7 @@ def _segments(blocks: list[Block]) -> list[tuple[str, list[Block]]]:
 def _merge_heading_captions(segs: list[tuple[str, list[Block]]]) -> list[tuple[str, list[Block]]]:
     """`2.0-46`：把「**只含 heading 的 text 段** + 紧随的 table 段」合成一组，heading 作 caption。
 
-    ⚠️ **为什么落点在这里、不在解析层**（文档侧 §1.37②，我认同）：
+    ⚠️ **为什么落点在这里、不在解析层**：
     heading 同时是**章节标记** —— `split_blocks` 靠它维护 `heading` 变量、喂给后续块的 `title`。
     在解析层把它"吞成 caption"会**丢掉层级**。这里合并的只是**段的组合方式**：
     IR 不变，且合并后 `heading` 变量**照常更新**（见 `split_blocks` 里的 `heading = cap.text`）。

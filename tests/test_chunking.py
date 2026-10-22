@@ -137,7 +137,7 @@ def test_heading_before_table_becomes_caption():
 def test_caption_does_not_break_hierarchy():
     """⚠️ **关键**：Caption 化的 heading **仍然是章节标记** —— 后续块要能继承它。
 
-    这正是"落点放切块层、不放解析层"的理由（文档侧 §1.37②）：
+    这正是"落点放切块层、不放解析层"的理由：
     在解析层吞掉 heading 会**丢层级**。
     """
     chunks = split_blocks(_doc(

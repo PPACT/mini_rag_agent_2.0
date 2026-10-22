@@ -87,7 +87,7 @@ def test_drop_params_default_is_false():
     `False` 让它**直接报错** —— 从"静默失效"变成"响"。
     """
     assert get_settings().llm_drop_params is False, (
-        "改回 True 就等于允许静默丢弃 —— 若确需回退，请在内部评审记录说明理由"
+        "改回 True 就等于允许静默丢弃 —— 若确需回退，请说明理由"
     )
 
 
