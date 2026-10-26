@@ -18,7 +18,7 @@ services:
       retries: 10
 
   # ===== 压测库（rag_stress）—— 合成评测语料，**可随时重建** =====
-  # 为什么独立容器（而非同库两张表）：见 内部评审记录 §1.6。
+  # 为什么独立容器（而非同库两张表）：见 `.env.example` 里的两库说明。
   #   ① 物理隔离 → 压测怎么折腾都碰不到真实数据；② 可整库丢弃重建；
   #   ③ 将来真实库单独迁 Milvus 时，压测库留在 PG 不受影响。
   #
@@ -82,8 +82,118 @@ services:
       timeout: 5s
       retries: 10
 
+  # ===== 应用层（v1：一条命令起全栈）=====
+  # 首次启动先跑迁移（一次性容器，成功退出后才启动 API / worker）
+  migrate:
+    build: .
+    image: rag-demo-api:local
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # alembic **必须显式给**目标库（fail-closed），这里指容器网络里的真实库
+      ALEMBIC_DATABASE_URL: postgresql://${POSTGRES_USER:-rag}:${POSTGRES_PASSWORD:-rag_demo_pwd}@postgres:5432/${POSTGRES_DB:-rag_real}
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # API：容器内连 postgres / redis（**不用宿主端口**，走服务名）
+  api:
+    build: .
+    image: rag-demo-api:local
+    env_file:
+      - path: .env
+        required: false
+    environment: &app-env
+      DATABASE_URL: postgresql://${POSTGRES_USER:-rag}:${POSTGRES_PASSWORD:-rag_demo_pwd}@postgres:5432/${POSTGRES_DB:-rag_real}
+      DATABASE_URL_STRESS: postgresql://${POSTGRES_USER:-rag}:${POSTGRES_PASSWORD:-rag_demo_pwd}@postgres-stress:5432/${POSTGRES_STRESS_DB:-rag_stress}
+      REDIS_URL: redis://redis:6379/0
+      QUEUE_REDIS_URL: redis://redis_queue:6379/0
+      # Ollama 留在宿主（模型/GPU 迁移成本高）——见部署说明的**前置步骤**
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL_DOCKER:-http://host.docker.internal:11451}
+      # 语料 / 上传件都在卷里，**不烤进镜像**
+      CORPUS_DIR: /app/data/corpus
+      UPLOAD_DIR: /app/data/uploads
+      # 容器里不带 sentence-transformers/torch ⇒ 精排走 LLM
+      RERANK_BACKEND: ${RERANK_BACKEND:-llm}
+    extra_hosts:
+      # Linux 下让 host.docker.internal 可用；Docker Desktop 自带
+      - "host.docker.internal:host-gateway"
+    # 🔴 默认栈 8 MB 不够：`import jieba` 加载内置词典时**栈溢出 → 段错误**
+    #    （实测：8 MB 必现 SIGSEGV；非 root 用户下 64 MB 仍偶发，256 MB 稳定）。
+    #    worker 同样需要。
+    ulimits:
+      stack: 268435456
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - uploads:/app/data
+      # 语料**只读**挂载（⛔ 不打进镜像）；空卷也能跑 —— 语料由使用者自己放进去
+      - corpus:/app/data/corpus:ro
+      # 评测产物只读挂进来（看板取数；目录不存在时为空表）
+      - ./logs:/app/logs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redis_queue:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # 不依赖 curl：镜像里只装 requirements.lock 的依赖
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  worker:
+    build: .
+    image: rag-demo-api:local
+    env_file:
+      - path: .env
+        required: false
+    environment: *app-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ulimits:
+      stack: 268435456
+    command: ["python", "-m", "arq", "src.tasks.worker.WorkerSettings"]
+    volumes:
+      - uploads:/app/data
+      - corpus:/app/data/corpus:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis_queue:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # 前端：生产构建 + nginx（/api/ 反代到 api:8000）
+  web:
+    build:
+      # 上下文必须是仓库根：`vite.config.ts` 构建期会读 `scripts/demo_ports.py`
+      context: .
+      dockerfile: web/Dockerfile
+    image: rag-demo-web:local
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:
   pgdata_stress:
   redisdata:
   redisqueuedata:
+  uploads:
+  corpus:

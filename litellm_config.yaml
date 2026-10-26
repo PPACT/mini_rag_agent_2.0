@@ -6,7 +6,7 @@
 #   · 判定/精排  src/config/litellm_client.py  （litellm.acompletion）
 #   二者都读 src/config/settings.py ← .env 的 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL / LLM_PROVIDER
 #
-# 历史教训：本文件曾因未与代码同步而变成「过期文档」（见 内部工单 #10）。
+# 历史教训：本文件曾因未与代码同步而变成「过期文档」。
 # 键名已同步为 LLM_*，但**它仍然不生效**——需要真配置请改 `.env`。
 #
 # 用途场景：将来若改用 **LiteLLM Proxy**（而不是在代码里直连），可照此配置。

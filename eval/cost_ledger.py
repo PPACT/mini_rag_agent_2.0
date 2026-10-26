@@ -23,6 +23,7 @@ import argparse
 import glob
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -152,8 +153,15 @@ def main() -> int:
     }
 
     out = Path(args.json)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        # ⚠️ 容器里 `logs/` 是**只读挂载**（产物由宿主提供）—— 退回临时目录并**明说**，
+        #    ⛔ 不静默失败（否则会以为"出了一份账"，其实没落盘）。
+        out = Path(tempfile.gettempdir()) / Path(args.json).name
+        out.write_text(json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"⚠️ 原路径不可写（{type(e).__name__}: {e}）→ 已改写到 {out}")
 
     print("\n【评测成本台账】（串行口径）")
     print(f"{'产物':<34}{'臂':<10}{'题数':>4}{'总token':>9}{'每题token':>10}{'串行分钟':>9}")

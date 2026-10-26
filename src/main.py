@@ -8,7 +8,7 @@ from fastapi import FastAPI
 
 from src.agent.graph_builder import init_agent
 from src.agent.mcp_client_wrapper import close_mcp, get_tools, open_mcp
-from src.api import chat_api, demo_api, upload_api
+from src.api import chat_api, demo_api, eval_api, upload_api
 from src.cache.redis_client import close_redis
 from src.db.connection import close_pool
 from src.embedding.base import close_embedding
@@ -35,6 +35,7 @@ app = FastAPI(title="RAG-Demo", lifespan=lifespan)
 app.include_router(upload_api.router)
 app.include_router(chat_api.router)
 app.include_router(demo_api.router)   # WebUI 链路透视（本地演示用）
+app.include_router(eval_api.router)   # 评测产物只读端点（生产构建的看板用它）
 
 
 @app.get("/health")
