@@ -91,18 +91,48 @@
 
 ## 快速开始
 
-**前置**：Docker / Ollama / Python 3.11（建议 conda 隔离环境）／
-**一个任意 OpenAI 兼容服务的 API key**（本项目用的是 DeepSeek）。
+**前置**：Docker Desktop（含 Compose v2）／ **Ollama 跑在宿主**／
+**一个任意 OpenAI 兼容服务的 API key**（默认 DeepSeek）。
+
+### 方式 A · Docker 一条命令起全栈（推荐：换设备 / 演示都用这个）
+
+> 另一台设备上只需要 **Docker ＋ Ollama ＋ 一个 API key**，不用装 Python / Node。
+
+```bash
+# 1) 嵌入模型（宿主；首次约 1.2 GB）
+#    ⚠️ 必须监听所有网卡，否则容器连不进来（本项目用 11451，不是默认的 11434）
+#    Windows（cmd）: set OLLAMA_HOST=0.0.0.0:11451 && ollama serve
+#    macOS / Linux:  OLLAMA_HOST=0.0.0.0:11451 ollama serve
+ollama pull bge-m3
+
+# 2) 配置：复制模板，填 LLM_API_KEY（其余默认值即可跑）
+cp .env.example .env
+
+# 3) 起全栈：PG + Redis + 自动迁移 + API + worker + 前端
+docker compose up -d
+```
+
+起来后打开 **<http://localhost:8080>**（用内置演示 token 登录）：
+
+- 健康检查：<http://localhost:8000/health> → `{"status":"ok"}`
+- 首次启动自动跑 `alembic upgrade head`；数据落在 Docker 卷里，`down` 后再 `up` 仍在
+- 停 / 清：`docker compose down` ／ `docker compose down -v`
+- **完整步骤、排错、边界**：见 **[DEPLOY.md](DEPLOY.md)**
+- ⚠️ 容器内**默认 LLM 精排**（镜像不带 `sentence-transformers` / `torch`）；
+  要用本地精排请走方式 B，或在 `.env` 里覆盖 `RERANK_BACKEND=local` 并自备模型
+
+### 方式 B · 开发模式（改代码 / 跑评测）
 
 ```bash
 # 1) 依赖（锁定版本）
 uv pip install -r requirements.lock
 
-# 2) 基础设施：PG(15432) + Redis(6379)
-docker compose up -d
+# 2) 只起基础设施（⚠️ 不带服务名会把 API / worker / 前端也一起起）
+docker compose up -d postgres redis redis_queue
 
 # 3) Ollama + 模型（本项目把 Ollama 跑在 11451，不是默认的 11434）
-ollama serve
+#    Windows（cmd）: set OLLAMA_HOST=127.0.0.1:11451 && ollama serve
+#    macOS / Linux:  OLLAMA_HOST=127.0.0.1:11451 ollama serve
 ollama pull bge-m3
 
 # 4) 建表（两个库都要迁）
@@ -113,10 +143,10 @@ PYTHONIOENCODING=utf-8 python -m uvicorn src.main:app
 PYTHONIOENCODING=utf-8 python -m arq src.tasks.worker.WorkerSettings
 ```
 
-> - 要跑**压测库**（15433，见「两库分离」）：`docker compose --profile stress up -d`
+> - 要跑**压测库**（15433，见「两库分离」）：`docker compose --profile stress up -d postgres-stress`
 > - 只校验不迁移：`python scripts/migrate_all.py --check`
 
-打开 <http://127.0.0.1:8000/demo> 是**链路透视页**：一次问答的候选、精排前后、耗时分解
+开发模式下打开 <http://127.0.0.1:8000/demo> 是**链路透视页**：一次问答的候选、精排前后、耗时分解
 都会显示出来，顶部还会标明**本次查询实际落在哪个库、用的哪个精排后端**。
 
 <p align="right">(<a href="#readme-top">回到顶部</a>)</p>
@@ -165,8 +195,12 @@ src/
 └── auth/ cache/ schemas/ observability/
 alembic/versions/     0001 建表 · 0002 切片元数据 · 0003 全文检索 · 0004 原始文件名
                       · 0005 page / raw_table / table_complex（2.0）
-eval/                 语料 + 标注数据集 + 评测脚本
+eval/                 评测脚本 + 标注数据集（语料由 `CORPUS_DIR` 指定，不入库）
 prompts/rag_system.yaml   提示词（外置，便于迭代）
+web/                  React 前端（生产构建由 `web/Dockerfile` 的 nginx 托管）
+Dockerfile            API / worker 镜像（同一镜像，两种启动命令）
+docker-compose.yml    全栈编排（infra + migrate + api + worker + web）
+DEPLOY.md             部署说明（Docker 全栈）
 docs/                 开发文档
 ```
 
@@ -188,7 +222,9 @@ docs/                 开发文档
 | `LLM_MODEL` | 模型名，默认 `deepseek-v4-flash` |
 | `LLM_PROVIDER` | LiteLLM 的**协议适配器**前缀（对应 `provider/model`），默认 `deepseek` |
 | `OLLAMA_BASE_URL` | 本地 embedding 服务，本项目跑在 `http://localhost:11451`（**非默认 11434**） |
-| `RERANK_BACKEND` | `local`（默认）/ `llm`，见下节 |
+| `OLLAMA_BASE_URL_DOCKER` | 仅 Docker：容器访问**宿主** Ollama 的地址，默认 `http://host.docker.internal:11451` |
+| `RERANK_BACKEND` | 本地开发默认 `local`；**容器内默认 `llm`**（镜像不带 `torch`），见下节 |
+| `CORPUS_DIR` / `UPLOAD_DIR` | 语料与上传件的位置；**容器内是卷**（`/app/data/corpus` 只读、`/app/data/uploads`），⛔ 不打进镜像 |
 
 > **换模型服务商**：改 `LLM_BASE_URL` + `LLM_MODEL` + `LLM_PROVIDER` 三项即可。
 > 注意不同厂商「关闭思考链」的参数并不一致 —— 换 provider 后请复验一次判定调用
@@ -215,9 +251,11 @@ docs/                 开发文档
 | `GET` | `/documents/{id}` | 查询处理状态 |
 | `POST` | `/demo/ask` | 链路透视（返回候选、精排前后、耗时分解） |
 | `GET` | `/demo` | 链路透视 WebUI |
+| `GET` | `/eval/index` | 评测产物只读索引（前端看板用；经 Web 容器走 `/api/eval/index`） |
+| `GET` | `/eval/{name}` | 单个评测产物（只读；含路径穿越校验） |
 | `GET` | `/health` | 健康检查 |
 
-除 `/health` 与 `/demo*` 外都需 `Authorization: Bearer <token>`。
+除 `/health`、`/demo*` 与 `/eval*` 外都需 `Authorization: Bearer <token>`。
 
 <p align="right">(<a href="#readme-top">回到顶部</a>)</p>
 
