@@ -68,10 +68,10 @@ class Settings(BaseSettings):
     llm_provider: str = "deepseek"
 
     # Embedding（本地 Ollama）
-    # ⚠️ 默认 11434 是 Ollama 标准端口；本项目实际把 Ollama 跑在 11451
-    # （见 scripts/start_demo.py 的 OLLAMA_HOST，规避 Windows 保留端口段），
-    # 所以 .env 必须显式设 OLLAMA_BASE_URL=http://localhost:11451，否则连不上。
-    ollama_base_url: str = "http://localhost:11434"
+    # 本项目统一把 Ollama 跑在 **11451**（规避 Windows 保留端口段；见 `.env.example` /
+    # `docker-compose.yml` / `scripts/start_demo.py`）。默认值也取 11451 ——
+    # 否则"没建 .env 就裸跑"会静默连到 11434（Ollama 标准端口）而后失败。
+    ollama_base_url: str = "http://localhost:11451"
     # 空闲多久后允许 Ollama 卸载 embedding 模型。Ollama 默认 5m，代价是
     # **每次隔一会儿再问，第一个请求要重载模型（实测多等 ~2.5 秒）**。
     # 折中取 30m：短暂离开回来不用等，长时间闲置仍会释放显存（bge-m3 约 660MB）。

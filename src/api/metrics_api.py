@@ -28,14 +28,14 @@ async def _system() -> dict:
 
     try:
         pool = await get_pool(KB_REAL)
-        documents = await pool.fetchval(
-            "SELECT count(*) FROM documents WHERE is_deleted = false")
         chunks = await pool.fetchval(
             "SELECT count(*) FROM chunks c JOIN documents d ON d.id = c.document_id "
             "WHERE d.is_deleted = false")
         rows = await pool.fetch(
             "SELECT status, count(*) AS n FROM documents WHERE is_deleted = false "
             "GROUP BY status")
+        # 文档总数由下面这份分组结果求和即可 —— 再 count 一次是白跑一条全表扫描
+        documents = sum(int(r["n"]) for r in rows)
         out["db"] = {
             "available": True,
             "kb": KB_REAL,
