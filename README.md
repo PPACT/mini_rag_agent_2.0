@@ -1,11 +1,10 @@
 <a id="readme-top"></a>
 
 <!-- ============================================================
-     徽章：用「引用式链接」写法 —— 正文只写 [![名][名-shield]][名-url]，
-     所有 URL 集中在文件末尾（见「链接定义」）。改 URL 只改一处。
-     此处只放**静态**徽章；不用 star / fork / contributors 这类依赖仓库统计的
-     （单人项目会显示 0，反而难看）。
+     徽章：使用引用式链接写法，所有 URL 集中在文件末尾。
      ============================================================ -->
+<div align="center">
+
 [![Python][py-shield]][py-url]
 [![FastAPI][fastapi-shield]][fastapi-url]
 [![PostgreSQL][pg-shield]][pg-url]
@@ -19,39 +18,39 @@
 
 <br />
 
-<!-- ============================================================
-     头部：Markdown 做不到居中与图片尺寸，必须用 HTML
-     ============================================================ -->
-<div align="center">
-  <h3 align="center">mini_rag_agent_2.0</h3>
-  <p align="center">
-    <b>企业知识库 RAG-Agent</b>（2.0 重构中）—— 可溯源 · 会拒答 · 能发现文档冲突
-    <br />
-    目标不止答疑：把散落的文档变成<b>有结构、有关系、值得信</b>的知识底座
-    <br />
-    知识库侧全本地可跑（PG + pgvector + 本地 embedding），仅生成走云端 LLM
-    <br /><br />
-    <a href="docs/架构方案.md"><strong>看架构设计 »</strong></a>
-    &middot; <a href="#快速开始">快速开始</a>
-    &middot; <a href="#已知边界">已知边界</a>
-  </p>
+<h3 align="center">mini_rag_agent_2.0</h3>
+<p align="center">
+  <b>企业知识库 RAG-Agent</b>（2.0 重构中）—— 可溯源 · 会拒答 · 能发现文档冲突
+  <br />
+  目标不止答疑：把散落的文档变成<b>有结构、有关系、值得信</b>的知识底座
+  <br />
+  知识库侧全本地可跑（PG + pgvector + 本地 embedding），仅生成走云端 LLM
+</p>
+
+<p align="center">
+  <a href="docs/架构方案.md"><strong>看架构设计 »</strong></a>
+  &middot; <a href="#quick-start">快速开始</a>
+  &middot; <a href="#known-boundaries">已知边界</a>
+</p>
+
 </div>
 
 <br />
 
 <details>
-  <summary><b>目录</b>（点击展开）</summary>
+  <summary><b>📑 目录</b>（点击展开）</summary>
   <ol>
-    <li><a href="#这是什么">这是什么</a></li>
-    <li><a href="#快速开始">快速开始</a></li>
-    <li><a href="#架构一览">架构一览</a></li>
-    <li><a href="#目录结构">目录结构</a></li>
-    <li><a href="#配置">配置</a></li>
-    <li><a href="#接口一览">接口一览</a></li>
-    <li><a href="#精排后端">精排（Rerank）后端</a></li>
-    <li><a href="#两库分离">两库分离（真实库 / 压测库）</a></li>
-    <li><a href="#已知边界">已知边界</a></li>
-    <li><a href="#文档与测试">文档与测试</a></li>
+    <li><a href="#introduction">这是什么</a></li>
+    <li><a href="#quick-start">快速开始</a></li>
+    <li><a href="#architecture">架构一览</a></li>
+    <li><a href="#directory">目录结构</a></li>
+    <li><a href="#configuration">配置</a></li>
+    <li><a href="#api">接口一览</a></li>
+    <li><a href="#rerank">精排（Rerank）后端</a></li>
+    <li><a href="#database">两库分离（真实库 / 压测库）</a></li>
+    <li><a href="#data-ingestion">语料摄取与清洗</a></li>
+    <li><a href="#known-boundaries">当前能力范围</a></li>
+    <li><a href="#docs-testing">文档与测试</a></li>
     <li><a href="#license">License</a></li>
   </ol>
 </details>
@@ -64,35 +63,32 @@
 ![链路透视图][demo-screenshot]
 -->
 
-<!-- ============================================================ -->
-## 这是什么
+<a id="introduction"></a>
 
-企业内部知识库的问答系统。用户上传文档（PDF / Word / **Excel** / **代码**），用自然语言提问，
-系统检索知识库、按需调用业务系统工具、生成**带引用溯源**的答案；
-当检索到的候选**互相矛盾**时，**主动追问而不是擅自选一个**。
+## 📖 这是什么 (Introduction)
 
-**它要解决的第一个问题是「不敢信」**：企业文档散落各处，而 AI **答错比答不出更贵**。
-所以它的取舍很明确——**宁可拒答，不可编造**。
+企业内部知识库的问答系统。用户上传文档（PDF / Word / **Excel** / **代码**），用自然语言提问，系统检索知识库、按需调用业务系统工具、生成**带引用溯源**的答案；当检索到的候选**互相矛盾**时，**主动追问而不是擅自选一个**。
+
+**它要解决的第一个问题是「不敢信」**：企业文档散落各处，而 AI **答错比答不出更贵**。所以它的取舍很明确——**宁可拒答，不可编造**。
 
 四个它特意做对的地方：
 
-- **权限在服务端**：`department` / `secret_level` 一律取自鉴权 token，不信任客户端传参；
-- **引用是真的**：`sources` 只返回 LLM **实际引用**的块，不是全部召回结果；
-- **答不上来会说不知道**：判定分**三态**（有答案 / 无答案 / **无法判断**），而不是"猜一个"；
-- **按结构解析**：三层路由（文件级 → 解析器级 → 切块级），
-  **表格整体保留、不被字符数切断**，原表随引用一并返回。
+- 🛡️ **权限在服务端**：`department` / `secret_level` 一律取自鉴权 token，不信任客户端传参；
+- 🎯 **引用是真的**：`sources` 只返回 LLM **实际引用**的块，不是全部召回结果；
+- 🤷 **答不上来会说不知道**：判定分**三态**（有答案 / 无答案 / **无法判断**），而不是"猜一个"；
+- 📑 **按结构解析**：三层路由（文件级 → 解析器级 → 切块级），**表格整体保留、不被字符数切断**，原表随引用一并返回。
 
-**2.0 已落地**：三层路由式解析 · **表格内容入库** · **页码元数据**（引用可答"第几页"）·
-**解析失败显式报错**（不再静默丢文件）。
+> **2.0 已落地**：三层路由式解析 · **表格内容入库** · **页码元数据**（引用可答"第几页"）· **解析失败显式报错**（不再静默丢文件）。
 
 <p align="right">(<a href="#readme-top">回到顶部</a>)</p>
 
 ---
 
-## 快速开始
+<a id="quick-start"></a>
 
-**前置**：Docker Desktop（含 Compose v2）／ **Ollama 跑在宿主**／
-**一个任意 OpenAI 兼容服务的 API key**（默认 DeepSeek）。
+## 🚀 快速开始 (Quick Start)
+
+**前置要求**：Docker Desktop（含 Compose v2）／ **Ollama 跑在宿主**／ **一个任意 OpenAI 兼容服务的 API key**（默认 DeepSeek）。
 
 ### 方式 A · Docker 一条命令起全栈（推荐：换设备 / 演示都用这个）
 
@@ -114,12 +110,11 @@ docker compose up -d
 
 起来后打开 **<http://localhost:8080>**（用内置演示 token 登录）：
 
-- 健康检查：<http://localhost:8000/health> → `{"status":"ok"}`
-- 首次启动自动跑 `alembic upgrade head`；数据落在 Docker 卷里，`down` 后再 `up` 仍在
-- 停 / 清：`docker compose down` ／ `docker compose down -v`
-- **完整步骤、排错、边界**：见 **[DEPLOY.md](DEPLOY.md)**
-- ⚠️ 容器内**默认 LLM 精排**（镜像不带 `sentence-transformers` / `torch`）；
-  要用本地精排请走方式 B，或在 `.env` 里覆盖 `RERANK_BACKEND=local` 并自备模型
+- 🩺 **健康检查**：<http://localhost:8000/health> → `{"status":"ok"}`
+- ⚙️ 首次启动自动跑 `alembic upgrade head`；数据落在 Docker 卷里，`down` 后再 `up` 仍在
+- 🛑 **停 / 清**：`docker compose down` ／ `docker compose down -v`
+- 📘 **完整步骤、排错、边界**：见 **[DEPLOY.md](DEPLOY.md)**
+- ⚠️ 容器内**默认 LLM 精排**（镜像不带 `sentence-transformers` / `torch`）；要用本地精排请走方式 B，或在 `.env` 里覆盖 `RERANK_BACKEND=local` 并自备模型。
 
 ### 方式 B · 开发模式（改代码 / 跑评测）
 
@@ -146,16 +141,17 @@ PYTHONIOENCODING=utf-8 python -m arq src.tasks.worker.WorkerSettings
 > - 要跑**压测库**（15433，见「两库分离」）：`docker compose --profile stress up -d postgres-stress`
 > - 只校验不迁移：`python scripts/migrate_all.py --check`
 
-开发模式下打开 <http://127.0.0.1:8000/demo> 是**链路透视页**：一次问答的候选、精排前后、耗时分解
-都会显示出来，顶部还会标明**本次查询实际落在哪个库、用的哪个精排后端**。
+开发模式下打开 <http://127.0.0.1:8000/demo> 是**链路透视页**：一次问答的候选、精排前后、耗时分解都会显示出来，顶部还会标明**本次查询实际落在哪个库、用的哪个精排后端**。
 
 <p align="right">(<a href="#readme-top">回到顶部</a>)</p>
 
 ---
 
-## 架构一览
+<a id="architecture"></a>
 
-```
+## 🏗️ 架构一览 (Architecture)
+
+```text
 入口      /chat（业务问答） · /documents（上传/状态） · /demo（链路透视）
 解析      三层路由：文件级（后缀 + magic 互证）→ 解析器级（链式 fallback）→ 切块级
           产出统一中间表示；表格与代码整块不切，段落按段切
@@ -178,9 +174,11 @@ PYTHONIOENCODING=utf-8 python -m arq src.tasks.worker.WorkerSettings
 
 ---
 
-## 目录结构
+<a id="directory"></a>
 
-```
+## 📁 目录结构 (Directory Structure)
+
+```text
 src/
 ├── api/              chat_api · upload_api · demo_api（含链路透视 WebUI）
 ├── rag/              retriever · reranker · ambiguity · query_rewriter
@@ -208,12 +206,13 @@ docs/                 开发文档
 
 ---
 
-## 配置
+<a id="configuration"></a>
+
+## ⚙️ 配置 (Configuration)
 
 复制 `.env.example` 为 `.env`，填好 LLM 的 key。其余默认值可本地跑通。
 
-**LLM 不绑定特定厂商**：生成链路走 OpenAI 兼容接口（`ChatOpenAI`），判定 / 精排走 LiteLLM，
-两者读同一组配置。想换厂商，改 **base URL + 模型名 + provider 前缀** 即可。
+**LLM 不绑定特定厂商**：生成链路走 OpenAI 兼容接口（`ChatOpenAI`），判定 / 精排走 LiteLLM，两者读同一组配置。想换厂商，改 **base URL + 模型名 + provider 前缀** 即可。
 
 | 键 | 说明 |
 |---|---|
@@ -226,11 +225,9 @@ docs/                 开发文档
 | `RERANK_BACKEND` | 本地开发默认 `local`；**容器内默认 `llm`**（镜像不带 `torch`），见下节 |
 | `CORPUS_DIR` / `UPLOAD_DIR` | 语料与上传件的位置；**容器内是卷**（`/app/data/corpus` 只读、`/app/data/uploads`），⛔ 不打进镜像 |
 
-> **换模型服务商**：改 `LLM_BASE_URL` + `LLM_MODEL` + `LLM_PROVIDER` 三项即可。
-> 注意不同厂商「关闭思考链」的参数并不一致 —— 换 provider 后请复验一次判定调用
->（日志中 `thinking_leaked` 计数应为 0）。细节见 [`docs/架构方案.md`](docs/架构方案.md)。
+> **换模型服务商**：改 `LLM_BASE_URL` + `LLM_MODEL` + `LLM_PROVIDER` 三项即可。注意不同厂商「关闭思考链」的参数并不一致 —— 换 provider 后请复验一次判定调用（日志中 `thinking_leaked` 计数应为 0）。细节见 [`docs/架构方案.md`](docs/架构方案.md)。
 
-鉴权用内置示例 token（生产环境替换为 JWT / SSO）：
+**鉴权用内置示例 token（生产环境替换为 JWT / SSO）**：
 
 | token | 身份 |
 |---|---|
@@ -242,7 +239,9 @@ docs/                 开发文档
 
 ---
 
-## 接口一览
+<a id="api"></a>
+
+## 🔌 接口一览 (API Reference)
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -255,22 +254,20 @@ docs/                 开发文档
 | `GET` | `/eval/{name}` | 单个评测产物（只读；含路径穿越校验） |
 | `GET` | `/health` | 健康检查 |
 
-除 `/health`、`/demo*` 与 `/eval*` 外都需 `Authorization: Bearer <token>`。
+> 除 `/health`、`/demo*` 与 `/eval*` 外都需 `Authorization: Bearer <token>`。
 
 <p align="right">(<a href="#readme-top">回到顶部</a>)</p>
 
 ---
 
-<!-- ============================================================
-     这一节用 <details> 折叠：内容重要但很长，不该占首屏
-     这正是 Best-README-Template 里最实用的一个技法
-     ============================================================ -->
-## 精排后端
+<a id="rerank"></a>
+
+## 🎯 精排后端 (Rerank Backend)
 
 检索是两段式：粗排召回 `RERANK_CANDIDATES` 条（默认 20）→ 精排取 `TOP_K` 条（默认 5）。
 
 <details>
-<summary><b>两个后端的取舍与切换方式</b>（点击展开）</summary>
+<summary><b>👉 两个后端的取舍与切换方式</b>（点击展开）</summary>
 
 <br />
 
@@ -279,10 +276,9 @@ docs/                 开发文档
 | `local`（**默认**） | `RERANK_BACKEND=local` | 本地 cross-encoder（`BAAI/bge-reranker-v2-m3`，fp16 加载）：输出确定、无网络依赖、延迟可预期、零 API 成本 |
 | `llm` | `RERANK_BACKEND=llm` | 走云端大模型（统一经 `src/config/litellm_client.py` 收口）：省本地模型，但受网络与限流影响 |
 
-> **两个后端都可用，取舍取决于你的场景** —— 本地模型是否已下载 / 能否接受云端依赖 /
-> 是否要做后端对照。本项目不宣称哪个"更好"，用配置切即可。
+> **两个后端都可用，取舍取决于你的场景** —— 本地模型是否已下载 / 能否接受云端依赖 / 是否要做后端对照。本项目不宣称哪个"更好"，用配置切即可。
 
-切换优先级（从高到低）：
+**切换优先级（从高到低）**：
 
 ```bash
 # ① 环境变量覆盖（临时，最优先）
@@ -291,11 +287,9 @@ RERANK_BACKEND=llm PYTHONIOENCODING=utf-8 python -m uvicorn src.main:app
 # ③ 改 src/config/settings.py 的 rerank_backend（代码默认值）
 ```
 
-用 `local` 需本地已有模型权重；设 `HF_HUB_OFFLINE=1` 可跳过 HF 联网检查（启动快很多）。
-模型**懒加载**：起服务后第一个请求会多花约十几秒载入权重，之后每次精排很快。
+用 `local` 需本地已有模型权重；设 `HF_HUB_OFFLINE=1` 可跳过 HF 联网检查（启动快很多）。模型**懒加载**：起服务后第一个请求会多花约十几秒载入权重，之后每次精排很快。
 
-> **注意**：用 `llm` 后端时不要开启思考链 —— 推理模型的思考会与结论抢同一份 `max_tokens`，
-> 输出可能为空。本项目默认已关闭（`llm_thinking_enabled=False`）；`local` 后端不过 LLM，不受影响。
+> ⚠️ **注意**：用 `llm` 后端时不要开启思考链 —— 推理模型的思考会与结论抢同一份 `max_tokens`，输出可能为空。本项目默认已关闭（`llm_thinking_enabled=False`）；`local` 后端不过 LLM，不受影响。
 
 </details>
 
@@ -303,34 +297,33 @@ RERANK_BACKEND=llm PYTHONIOENCODING=utf-8 python -m uvicorn src.main:app
 
 ---
 
-## 两库分离
+<a id="database"></a>
 
-`rag_real`(15432) / `rag_stress`(15433) **物理隔离** —— 压测语料与真实业务文档分开，
-互不干扰检索结果。
+## 🔀 两库分离 (Database Separation)
+
+`rag_real`(15432) / `rag_stress`(15433) **物理隔离** —— 压测语料与真实业务文档分开，互不干扰检索结果。
 
 | 入口 | 目标库 |
 |---|---|
 | `/chat` | **固定真实库**（业务入口） |
 | `/demo/ask`、`/upload` | 可选，默认真实库 |
 
-`kb` 是**必填的一级参数**：库层（连接池 / 向量库 / 检索 / 任务）**一律无默认值**，
-忘传即报错；默认值只出现在最外层 HTTP 契约，显式可见、可被调用方覆盖。
+`kb` 是**必填的一级参数**：库层（连接池 / 向量库 / 检索 / 任务）**一律无默认值**，忘传即报错；默认值只出现在最外层 HTTP 契约，显式可见、可被调用方覆盖。
 
-> 压测库用 compose `profiles` 按需启，日常 `up -d` 不会启动它。
-> 迁移请用 `python scripts/migrate_all.py --kb both`（两个库都迁并逐表比对 schema）；
-> 直接 `alembic upgrade head` 只会迁一个库。
+> 压测库用 compose `profiles` 按需启，日常 `up -d` 不会启动它。迁移请用 `python scripts/migrate_all.py --kb both`（两个库都迁并逐表比对 schema）；直接 `alembic upgrade head` 只会迁一个库。
 
 <p align="right">(<a href="#readme-top">回到顶部</a>)</p>
 
 ---
 
-## 语料摄取与清洗
+<a id="data-ingestion"></a>
 
-**语料放在哪由你决定** —— 目录、共享盘、临时路径都行。
-下面说的是**接口**：文件怎么喂进来、嵌入和清洗在哪一步发生。
+## 🧹 语料摄取与清洗 (Data Ingestion & Cleaning)
+
+**语料放在哪由你决定** —— 目录、共享盘、临时路径都行。下面说的是**接口**：文件怎么喂进来、嵌入和清洗在哪一步发生。
 
 <details>
-<summary><b>摄取入口 · 嵌入接口 · 清洗挂载点 · 支持格式</b>（点击展开）</summary>
+<summary><b>👉 摄取入口 · 嵌入接口 · 清洗挂载点 · 支持格式</b>（点击展开）</summary>
 
 <br />
 
@@ -343,7 +336,7 @@ RERANK_BACKEND=llm PYTHONIOENCODING=utf-8 python -m uvicorn src.main:app
 
 两者走**同一条管道**：
 
-```
+```text
 文件级路由 → 解析（链式 fallback）→ 〔清洗〕 → 切块 → 嵌入 → 落库
 ```
 
@@ -361,23 +354,19 @@ RERANK_BACKEND=llm PYTHONIOENCODING=utf-8 python -m uvicorn src.main:app
 ### 三、清洗接口
 
 清洗规则按**作用范围分布在管道各处**（不只是"解析后"的一步），共 35 条，分 5 组：
-**解析前**（编码 / 换行统一）· **解析中**（去标签 / 导航 / 页眉页脚）· **解析后**（去重）·
-**规范化**（空格 / 全角半角 / 繁简）· **富化**（语言 / 时间 / 来源 / 权限 / 章节 / 表格 / 代码块）。
+**解析前**（编码 / 换行统一）· **解析中**（去标签 / 导航 / 页眉页脚）· **解析后**（去重）· **规范化**（空格 / 全角半角 / 繁简）· **富化**（语言 / 时间 / 来源 / 权限 / 章节 / 表格 / 代码块）。
 
-其中 `keep` 类（权限 / 章节 / 表格 / 代码块）**已随解析层生效**；
-`remove` / `normalize` 那几组目前**尚未接入** —— 接入时会先以 **shadow 模式**跑，
-只记录命中量、**不改变输出**，量出误伤率后再逐条放行。
+其中 `keep` 类（权限 / 章节 / 表格 / 代码块）**已随解析层生效**；`remove` / `normalize` 那几组目前**尚未接入** —— 接入时会先以 **shadow 模式**跑，只记录命中量、**不改变输出**，量出误伤率后再逐条放行。
 
 > 规则表与取舍理由见 [`docs/架构方案.md`](docs/架构方案.md)。
 
 ### 四、支持的格式
 
-- **支持**：PDF / Word(`.docx`) / Excel / PPT(`.pptx`) / Markdown / txt / 代码 / HTML(`.html` / `.htm`)
-- **不支持**：其余格式（含 `.doc` / `.ppt` 老格式）→ **报错并给出原因**
-- **扫描件**：暂时只**标记「待 OCR」**，不识别
+- ✅ **支持**：PDF / Word(`.docx`) / Excel / PPT(`.pptx`) / Markdown / txt / 代码 / HTML(`.html` / `.htm`)
+- ❌ **不支持**：其余格式（含 `.doc` / `.ppt` 老格式）→ **报错并给出原因**
+- 📷 **扫描件**：暂时只**标记「待 OCR」**，不识别
 
-> 支持哪些格式以 `src/document_parser/routing.py::supported_extensions()` 为准。
-> 处理失败的文件不会被跳过：`GET /documents/{id}` 能看到 `failed` 与具体原因。
+> 支持哪些格式以 `src/document_parser/routing.py::supported_extensions()` 为准。处理失败的文件不会被跳过：`GET /documents/{id}` 能看到 `failed` 与具体原因。
 
 </details>
 
@@ -385,26 +374,25 @@ RERANK_BACKEND=llm PYTHONIOENCODING=utf-8 python -m uvicorn src.main:app
 
 ---
 
-## 当前能力范围
+<a id="known-boundaries"></a>
 
-- **文档解析**：PDF / Word / Excel / PPT / Markdown / txt / 代码。
-  表格转为自然语言并**保留原表**（随引用一起返回）；PDF 带**页码**；
-  解析失败会**给出原因**，不会静默跳过。
+## ✨ 当前能力范围 (Current Capabilities)
+
+- **文档解析**：PDF / Word / Excel / PPT / Markdown / txt / 代码。表格转为自然语言并**保留原表**（随引用一起返回）；PDF 带**页码**；解析失败会**给出原因**，不会静默跳过。
 - **检索**：向量 + 全文双路召回 → RRF 融合 → 两段式精排。
 - **问答**：引用溯源 · 三态判定（含"无法判断"）· 候选冲突时主动澄清。
 - **权限**：部门 + 密级，服务端强制过滤。
 - **部署**：embedding 与精排可全本地、不出网；换 LLM 服务商只改配置。
 
-> 图片与扫描件的文字识别、网页正文提取、清洗规则组目前尚未接入。
-> 完整的实现边界与演进计划见 [`docs/架构方案.md`](docs/架构方案.md)。
-
-> 本仓库的开发文档为下面「文档与测试」列出的三份。
+> 图片与扫描件的文字识别、网页正文提取、清洗规则组目前尚未接入。完整的实现边界与演进计划见 [`docs/架构方案.md`](docs/架构方案.md)。
 
 <p align="right">(<a href="#readme-top">回到顶部</a>)</p>
 
 ---
 
-## 文档与测试
+<a id="docs-testing"></a>
+
+## 📚 文档与测试 (Docs & Testing)
 
 | 文档 | 内容 |
 |---|---|
@@ -417,13 +405,15 @@ RERANK_BACKEND=llm PYTHONIOENCODING=utf-8 python -m uvicorn src.main:app
 PYTHONPATH=. python -m pytest tests/ -v
 ```
 
-`eval/` 下有评测语料、标注数据集与评测脚本（Recall@K / MRR / 漏报误报 / 改述一致率）。
+> `eval/` 下有评测语料、标注数据集与评测脚本（Recall@K / MRR / 漏报误报 / 改述一致率）。
 
 <p align="right">(<a href="#readme-top">回到顶部</a>)</p>
 
 ---
 
-## License
+<a id="license"></a>
+
+## 📄 License
 
 MIT —— 见 [`LICENSE`](LICENSE)。
 
