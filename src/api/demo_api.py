@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import time
 
 from fastapi import APIRouter, HTTPException
@@ -89,12 +90,11 @@ async def demo_ask(req: AskRequest) -> dict:
 
     candidates = trace.get("candidates", [])
     final = trace.get("final", [])
-    answer, cited, generate_ms = None, [], 0
-    gen_usage: dict = {}
 
-    if req.with_answer and settings.llm_api_key and final:
+    async def _generate() -> tuple[str, list, int, dict]:
         _, human_tpl = load_templates()
         t1 = time.perf_counter()
+        answer, usage = "", {}
         try:
             agent = get_agent()
             # ⭐ `2.0-65`：与 `/chat` **同一条上限** —— 否则这里是个绕过口
@@ -106,7 +106,7 @@ async def demo_ask(req: AskRequest) -> dict:
                     config={"recursion_limit": settings.agent_recursion_limit},
                 )
             answer = str(result["messages"][-1].content)
-            gen_usage = metrics.usage_from_messages(result["messages"])
+            usage = metrics.usage_from_messages(result["messages"])
             if not answer.strip():
                 # 与 /chat 一致（P0-4）：空答案**显式化**，不把空白当正常答案返回
                 answer = "[生成环节未返回内容]"
@@ -115,18 +115,37 @@ async def demo_ask(req: AskRequest) -> dict:
             answer = "[触到编排步数上限，已中止] 这次生成反复调用工具超过上限；建议把问题拆小一点。"
         except Exception as e:  # noqa: BLE001
             answer = f"[生成失败] {e}"
-        generate_ms = int((time.perf_counter() - t1) * 1000)
+        ms = int((time.perf_counter() - t1) * 1000)
         # 引用校验（与线上一致）
         from src.api.chat_api import _cited_chunks
         cited = [_brief(c, i) for i, c in enumerate(_cited_chunks(final, answer), 1)]
+        return answer, cited, ms, usage
 
-    # 歧义判定也是 LLM 调用（1-3 秒），必须计时——否则页面显示的"合计"会远低于真实等待
-    t2 = time.perf_counter()
-    amb_usage: dict = {}
-    amb = (await check_ambiguity(req.question, final, usage_out=amb_usage)
-           if final else None)
-    ambiguity_ms = int((time.perf_counter() - t2) * 1000)
-    total_ms = retrieve_ms + generate_ms + ambiguity_ms
+    async def _judge() -> tuple[object, int, dict]:
+        t2 = time.perf_counter()
+        usage: dict = {}
+        amb = (await check_ambiguity(req.question, final, usage_out=usage)
+               if final else None)
+        return amb, int((time.perf_counter() - t2) * 1000), usage
+
+    # ⭐ 生成与歧义判定**互相不依赖**（都只读 `final`）→ 并行。
+    #    ⚠️ 与 `/chat` 不同：`/chat` 里判定会**门控**生成（ambiguous 走澄清），不能照搬。
+    gen_task = (asyncio.create_task(_generate())
+                if (req.with_answer and settings.llm_api_key and final) else None)
+    judge_task = asyncio.create_task(_judge())
+    answer, cited, generate_ms, gen_usage = None, [], 0, {}
+    amb, ambiguity_ms, amb_usage = None, 0, {}
+    try:
+        if gen_task is not None:
+            answer, cited, generate_ms, gen_usage = await gen_task
+        amb, ambiguity_ms, amb_usage = await judge_task
+    finally:
+        for t in (gen_task, judge_task):
+            if t is not None and not t.done():
+                t.cancel()
+
+    # ⚠️ 墙钟：生成与判定并行，**不再等于各段相加**
+    total_ms = int((time.perf_counter() - t0) * 1000)
 
     # ⭐ `2.0-67`：透视页的这次请求也进监控缓冲（同一份数据源，⛔ 不改响应）。
     _mode = trace.get("mode") or {}

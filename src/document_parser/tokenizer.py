@@ -45,6 +45,10 @@ _preload_jieba_prob()
 
 import jieba  # noqa: E402  （必须在预加载之后）
 
+# 词典在**首次 cut()** 时才加载（~0.5s）。放在 import 期做掉：
+# 否则第一次检索/入库会在事件循环里同步加载，把整个进程卡住半秒。
+jieba.initialize()
+
 # 只保留"有意义的"token：字母、数字、汉字（丢弃纯标点/空白）
 _PUNCT_ONLY = re.compile(r"^[^\w一-鿿]+$", re.UNICODE)
 

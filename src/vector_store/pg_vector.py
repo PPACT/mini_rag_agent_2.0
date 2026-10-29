@@ -1,6 +1,8 @@
 """PgVectorStore：pgvector + 全文检索实现（asyncpg）。"""
 from __future__ import annotations
 
+import asyncio
+
 from src.db.connection import get_pool
 from src.document_parser.tokenizer import tokenize
 from src.vector_store.base import AccessFilter, Chunk, VectorStore
@@ -16,6 +18,17 @@ _SELECT_COLS = """
 # 向量距离的原生运算符形态（$1 = 查询向量）。
 # ⚠️ **必须原样出现在 ORDER BY 里**，HNSW 索引才会被使用——见 `_build_search_sql` 的 D9-⑪ 注释。
 _VEC_DIST = "c.embedding <=> $1::vector"
+
+# 批量插入（executemany 用）：一块一次 INSERT 会随文档块数线性放大入库时间
+_INSERT_CHUNKS = """
+INSERT INTO chunks (document_id, chunk_index, document_version,
+                    content, embedding, department, secret_level, source_file,
+                    start_offset, end_offset, title,
+                    page, raw_table, table_complex, content_tsv,
+                    content_hash, table_id, image_path)
+VALUES ($1::uuid, $2, $3, $4, $5::vector, $6, $7, $8, $9, $10, $11,
+        $12, $13, $14, to_tsvector('simple', $15), $16, $17, $18)
+"""
 
 
 def _row_to_chunk(r) -> Chunk:
@@ -195,58 +208,50 @@ class PgVectorStore(VectorStore):
 
     async def replace_document(self, document_id: str, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
         """同一事务内：先删旧 chunk，再插新 chunk。"""
+        if len(chunks) != len(embeddings):
+            # 调用方本应已核对（embedding 服务也有闸）；这里再兜一次，
+            # ⛔ 绝不让 `zip` 截短成"少几块"而不报错。
+            raise ValueError(
+                f"chunks({len(chunks)}) 与 embeddings({len(embeddings)}) 条数不一致")
+
+        def _build_rows() -> list[tuple]:
+            """CPU 活（分词/向量序列化）放线程里做，别占事件循环。"""
+            rows: list[tuple] = []
+            for chunk, emb in zip(chunks, embeddings, strict=True):
+                rows.append((
+                    chunk.document_id,
+                    chunk.chunk_index,
+                    chunk.document_version,
+                    chunk.content,
+                    self._vec_str(emb),
+                    chunk.department,
+                    chunk.secret_level,
+                    chunk.source_file,
+                    chunk.start_offset,
+                    chunk.end_offset,
+                    chunk.title,
+                    chunk.page,
+                    chunk.raw_table,
+                    chunk.table_complex,
+                    # 词法索引吃两份：自然语言版 + 原表（2.0-1 口径）。
+                    # ⚠️ `raw_table` 的**独有 token 数应为 0**（自然语言版逐字保真）；
+                    #    真实作用是词频提升 + 保险，不是"新增一条精确命中路径"。
+                    #    守卫：`tests/test_tables.py::test_raw_table_adds_no_unique_tokens`。
+                    tokenize(chunk.content + ("\n" + chunk.raw_table if chunk.raw_table else "")),
+                    chunk.content_hash,
+                    chunk.table_id,
+                    chunk.image_path,
+                ))
+            return rows
+
+        rows = await asyncio.to_thread(_build_rows)
         pool = await get_pool(self._kb)
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute("DELETE FROM chunks WHERE document_id = $1::uuid", document_id)
-                for chunk, emb in zip(chunks, embeddings):
-                    await conn.execute(
-                        """
-                        INSERT INTO chunks (document_id, chunk_index, document_version,
-                                            content, embedding, department, secret_level, source_file,
-                                            start_offset, end_offset, title,
-                                            page, raw_table, table_complex, content_tsv,
-                                            content_hash, table_id, image_path)
-                        VALUES ($1::uuid, $2, $3, $4, $5::vector, $6, $7, $8, $9, $10, $11,
-                                $12, $13, $14, to_tsvector('simple', $15), $16, $17, $18)
-                        """,
-                        chunk.document_id,
-                        chunk.chunk_index,
-                        chunk.document_version,
-                        chunk.content,
-                        self._vec_str(emb),
-                        chunk.department,
-                        chunk.secret_level,
-                        chunk.source_file,
-                        chunk.start_offset,
-                        chunk.end_offset,
-                        chunk.title,
-                        chunk.page,
-                        chunk.raw_table,
-                        chunk.table_complex,
-                        # 词法索引吃两份：自然语言版 + 原表（2.0-1 口径）。
-                        # 向量侧仍只算 content（embedding 在调用方按 content 算好传进来）。
-                        #
-                        # ⚠️ **但别把它的作用说大了**（2026-09-30 实测）：
-                        # 因为自然语言版**逐字保留**所有值（那正是 2.0-1 的保真验收），
-                        # `tokenize(content + raw_table)` 与 `tokenize(content)`
-                        # 的 **token 集合完全相同** —— 实测 `raw_table` 独有的 token 数为 **0**。
-                        # 所以它**不是**"新增了一条精确命中路径"（那样写是错的），真实作用是：
-                        #   ① **词频提升**：ts_rank 计次 → 表格块在数值类查询下排名略微靠前；
-                        #   ② **保险**：万一将来自然语言版变得有损（丢列/丢行），
-                        #      原表还在词法索引里，不至于连值都搜不到。
-                        # ⭐ **"本字段的独有 token 应为空"是一个可观测的健康指标**（既有建议）：
-                        #    **不为空 → 自然语言版有损（丢了列/值）→ 去查 `render_nl`，别查索引。**
-                        #    守卫：`tests/test_tables.py::test_raw_table_adds_no_unique_tokens`
-                        #    （带反向用例 —— 用一份有损的渲染验证它真能失败）。
-                        #
-                        # 中文需 Python 侧分词后再交给 tsvector。
-                        tokenize(chunk.content + ("\n" + chunk.raw_table if chunk.raw_table else "")),
-                        # `2.0-30`：内容哈希（只重嵌变了的块）+ 两个预留列
-                        chunk.content_hash,
-                        chunk.table_id,
-                        chunk.image_path,
-                    )
+                # 一条 SQL 批量写：原来一块一次往返，长文档入库时间随块数线性放大
+                if rows:
+                    await conn.executemany(_INSERT_CHUNKS, rows)
 
     async def delete_by_document(self, document_id: str) -> None:
         """物理删除某文档的全部向量（软删由 documents.is_deleted 负责）。"""

@@ -1,6 +1,7 @@
 """提示词模板加载（外置 prompts/rag_system.yaml）。"""
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -8,7 +9,14 @@ import yaml
 _PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "rag_system.yaml"
 
 
+@lru_cache(maxsize=None)
 def _load(section: str) -> dict:
+    """读取并解析一份模板。
+
+    ⚠️ **必须缓存**：`/chat` 一次请求原本会同步读盘＋整份 YAML 解析 3~4 次，
+    在事件循环里阻塞（对话一多就变成排队）。模板是**进程级常量**，
+    **改 `prompts/rag_system.yaml` 后需重启进程才生效**。
+    """
     return yaml.safe_load(_PROMPT_PATH.read_text(encoding="utf-8"))[section]
 
 

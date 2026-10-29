@@ -114,3 +114,63 @@ def test_ask_request_carries_rerank_backend():
 
     assert AskRequest(question="q").rerank_backend is None
     assert AskRequest(question="q", rerank_backend="llm").rerank_backend == "llm"
+
+
+# ===== 懒加载不能卡事件循环 =====
+#
+# 首次加载要 import torch + 载权重（160s+）。若在协程里同步加载，
+# 这段时间**整个服务**的所有请求都不响应。
+
+
+class _FakeModel:
+    def predict(self, pairs):
+        return [0.5 for _ in pairs]
+
+
+def _chunks():
+    from src.vector_store.base import Chunk
+
+    return [Chunk(document_id="d", chunk_index=0, content="正文", source_file="a.docx", id="c1")]
+
+
+def test_model_load_runs_off_event_loop(monkeypatch):
+    """反向用例：加载必须发生在工作线程，而不是事件循环线程。"""
+    import asyncio
+    import threading
+
+    r = LocalCrossEncoderReranker()
+    seen: dict = {}
+
+    def _load():
+        seen["thread"] = threading.current_thread()
+        r._model = _FakeModel()
+        return r._model
+
+    monkeypatch.setattr(r, "_ensure_model", _load)
+    asyncio.run(r.score_order("q", _chunks()))
+    assert seen["thread"] is not threading.main_thread(), \
+        f"模型加载跑在主线程里：{seen['thread']}"
+
+
+def test_concurrent_first_calls_load_once(monkeypatch):
+    """并发首请求只加载一次 —— 否则同时载入多份权重（每份 ~1.1GB）。"""
+    import asyncio
+    import time
+
+    r = LocalCrossEncoderReranker()
+    calls: list = []
+
+    def _slow_load():
+        calls.append(1)
+        time.sleep(0.05)
+        r._model = _FakeModel()
+        return r._model
+
+    monkeypatch.setattr(r, "_ensure_model", _slow_load)
+
+    async def _two():
+        return await asyncio.gather(r.score_order("q", _chunks()),
+                                    r.score_order("q", _chunks()))
+
+    asyncio.run(_two())
+    assert len(calls) == 1, f"并发首次调用加载了 {len(calls)} 次"

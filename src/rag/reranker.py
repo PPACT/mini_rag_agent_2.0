@@ -207,6 +207,8 @@ class LocalCrossEncoderReranker(BaseReranker):
         self._route = s.rerank_route_enabled
         self._density = s.rerank_numeric_density
         self._model = None
+        # 首次加载（~160s）串行化：并发首请求只加载一次，其余等在锁上
+        self._load_lock = asyncio.Lock()
 
     def _ensure_model(self):
         """懒加载（首次调用时才载入权重）。
@@ -237,7 +239,13 @@ class LocalCrossEncoderReranker(BaseReranker):
 
     async def score_order(self, query: str,
                           chunks: list[Chunk]) -> list[tuple[Chunk, float | None]]:
-        model = self._ensure_model()
+        if self._model is None:
+            # ⚠️ 懒加载是**同步阻塞**（import torch + 载权重，实测 160s+）。
+            #    直接在这里调用会把整个事件循环卡死 —— 期间**所有**请求都不响应。
+            async with self._load_lock:
+                if self._model is None:
+                    await asyncio.to_thread(self._ensure_model)
+        model = self._model
         pairs = [(query, text_for_rerank(query, c.content or "", self._snippet,
                                          route=self._route, threshold=self._density))
                  for c in chunks]

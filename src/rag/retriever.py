@@ -1,6 +1,7 @@
 """RAG 检索：多查询扩展 → 向量粗排 → RRF 融合 → 精排(Rerank) → 权限过滤。"""
 from __future__ import annotations
 
+import asyncio
 import time
 
 from src.config.settings import get_settings
@@ -86,6 +87,7 @@ async def retrieve(
         top_k = settings.top_k
     # 早失败：后端名写错时立刻报错，而不是"跑完才发现精排根本没换"（D11 / P-2）
     rerank_backend = resolve_backend(rerank_backend)
+    t_func = time.perf_counter()
 
     # 粗排召回数：开启精排则放大召回，给精排留出挑选空间
     recall_k = max(top_k, settings.rerank_candidates) if use_rerank else top_k
@@ -97,34 +99,46 @@ async def retrieve(
     ms_rewrite = (time.perf_counter() - t0) * 1000
 
     embedding = get_embedding()
-    t0 = time.perf_counter()
-    query_vectors = await embedding.embed(queries)
-    ms_embed = (time.perf_counter() - t0) * 1000
-
     store = get_vector_store(kb)
     filters = AccessFilter(departments=departments, secret_level_le=secret_level)
 
-    ranked_lists: list[list[Chunk]] = []
-    vector_lists: list[list[Chunk]] = []
+    async def _timed(coro) -> tuple[object, float]:
+        t = time.perf_counter()
+        out = await coro
+        return out, (time.perf_counter() - t) * 1000
 
     # 词法侧（混合检索）：兜底"精确词"查询（缩写、编号、型号）
     # 不支持的实现返回空列表，自动退化为纯向量检索
+    # ⭐ 它只用**原问题**、不依赖向量 → 先发出去，与 embedding 并行
+    lexical_task = (
+        asyncio.create_task(_timed(store.search_lexical(question, filters, recall_k)))
+        if use_hybrid else None
+    )
+
+    t0 = time.perf_counter()
+    try:
+        query_vectors, ms_embed = await _timed(embedding.embed(queries))
+
+        # 向量侧：多查询扩展的每一路**并发**（原来是一路一路串行等）
+        t_vec = time.perf_counter()
+        vector_results = await asyncio.gather(
+            *(_timed(store.search(vec, filters, recall_k)) for vec in query_vectors))
+        ms_vector = (time.perf_counter() - t_vec) * 1000
+    except Exception:
+        # 上游失败时别把词法任务晾着（否则会有 "Task exception was never retrieved"
+        if lexical_task is not None:
+            lexical_task.cancel()
+        raise
+
+    ranked_lists: list[list[Chunk]] = []
+    vector_lists: list[list[Chunk]] = [lst for lst, _ in vector_results]
+
     ms_lexical = 0.0
-    if use_hybrid:
-        t0 = time.perf_counter()
-        lexical = await store.search_lexical(question, filters, recall_k)
-        ms_lexical = (time.perf_counter() - t0) * 1000
+    if lexical_task is not None:
+        lexical, ms_lexical = await lexical_task
         if lexical:
             ranked_lists.append(lexical)
-
-    # 向量侧（多查询扩展的每一路）
-    ms_vector = 0.0
-    for vec in query_vectors:
-        t0 = time.perf_counter()
-        lst = await store.search(vec, filters, recall_k)
-        ms_vector += (time.perf_counter() - t0) * 1000
-        vector_lists.append(lst)
-        ranked_lists.append(lst)
+    ranked_lists.extend(vector_lists)
 
     t0 = time.perf_counter()
     if len(ranked_lists) == 1:
@@ -192,7 +206,9 @@ async def retrieve(
             "lexical_ms": ms_lexical, "vector_ms": ms_vector,
             "fuse_ms": ms_fuse, "rerank_ms": ms_rerank,
             "reranked": reranked,
-            "total_ms": ms_rewrite + ms_embed + ms_lexical + ms_vector + ms_fuse + ms_rerank,
+            # ⚠️ 词法/向量已并行：各段会重叠，`total_ms` 是**墙钟**，
+            #    **不再等于各段相加**（相加会大于总耗时，那不是 bug）。
+            "total_ms": (time.perf_counter() - t_func) * 1000,
         }
 
     return format_context(chunks), chunks
