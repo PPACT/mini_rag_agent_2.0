@@ -20,6 +20,7 @@ from langgraph.errors import GraphRecursionError
 
 from src.api import chat_api
 from src.auth.deps import User
+from src.observability import metrics
 from src.rag.ambiguity import AmbiguityResult
 from src.schemas.chat import ChatRequest, ChatResponse, ClarifyOption
 from src.vector_store.base import Chunk
@@ -92,7 +93,7 @@ def _wire(monkeypatch, *, answer="年假五天。", ambiguity=None, chunks=None,
 
     monkeypatch.setattr(chat_api, "retrieve", _retrieve)
 
-    async def _ambiguity(question, ch):  # noqa: ARG001
+    async def _ambiguity(question, ch, usage_out=None):  # noqa: ARG001
         return ambiguity if ambiguity is not None else AmbiguityResult()
 
     monkeypatch.setattr(chat_api, "check_ambiguity", _ambiguity)
@@ -271,3 +272,46 @@ def test_tool_rounds_are_audited(monkeypatch):
     assert llm_events, "没记 llm 审计"
     assert llm_events[-1]["tool_rounds"] == 2
     assert llm_events[-1]["recursion_limit"] == 17
+
+
+# ---- 运行态指标（`2.0-67`）----
+
+
+def test_request_is_recorded_without_question_text(monkeypatch):
+    """指标只记"这次怎么跑"，⛔ 不记问题原文 / 用户身份。"""
+    metrics.reset()
+    try:
+        _wire(monkeypatch)
+        _ask()
+
+        snap = metrics.snapshot()
+        assert snap["buffered"] == 1
+        item = snap["items"][0]
+        assert item["kind"] == "chat"
+        assert item["kb"] == "real"
+        assert item["judge_status"] == "clear"
+        assert item["answer_kind"] == "normal"
+        assert item["top_k"] == 5
+        assert item["tool_rounds"] == 0
+        assert "question" not in item, "⛔ 不存问题原文"
+        assert "user" not in item, "⛔ 不存用户身份"
+        assert snap["summary"]["requests"] == 1
+    finally:
+        metrics.reset()
+
+
+def test_cache_hit_is_recorded_as_cache(monkeypatch):
+    """缓存命中也要进指标 —— 否则监控台看到的请求数会少于真实访问量。"""
+    metrics.reset()
+    try:
+        _wire(monkeypatch)
+        _ask()      # 第一次：正常链路 + 写缓存
+        _ask()      # 第二次：命中
+        items = metrics.snapshot()["items"]
+        assert [i["answer_kind"] for i in items] == ["cache", "normal"]
+        assert items[0]["cache_hit"] is True
+        # ⚠️ 缓存命中没走检索：候选数 / 填充率必须留 None（⛔ 不是 0）
+        assert items[0]["candidates"] is None
+        assert items[0]["fill_rate"] is None
+    finally:
+        metrics.reset()

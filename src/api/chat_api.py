@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from langchain_core.messages import HumanMessage, ToolMessage
@@ -17,6 +18,7 @@ from src.cache.redis_client import get_redis
 from src.config.prompts import load_templates
 from src.config.settings import get_settings
 from src.db.kb import KB_REAL
+from src.observability import metrics
 from src.observability.tracer import audit, audit_err
 from src.rag.ambiguity import build_clarification, check_ambiguity
 from src.rag.retriever import retrieve
@@ -121,6 +123,48 @@ def _cited_chunks(chunks, answer: str) -> list:
     return [chunks[i] for i in idx]
 
 
+# ---- 运行态指标（`2.0-67`）----
+# ⚠️ **只观测**：这些函数不参与任何分支判断；`metrics.record()` 只做一次 append，
+#    ⛔ 不做 IO、不抛异常 —— 指标写失败绝不能把问答带崩。
+_STAGE_KEYS = metrics.STAGE_KEYS
+
+
+def _record_request(*, kb, top_k, trace, chunks, ambiguity, resp, t_start,
+                    retrieve_ms, generate_ms, ambiguity_ms, answer_kind,
+                    tool_rounds=None, tokens=None, cache_hit=False) -> None:
+    """把一次请求的指标写进环形缓冲。⛔ 不改响应、不参与判断。
+
+    ⚠️ `chunks=None` 表示**这次没走检索**（缓存命中）—— 此时候选数与填充率留 `None`，
+    ⛔ 不写 0：0 会被读成"检索一条都没召回"，那是另一回事。
+    """
+    stage = trace.get("timings") or {}
+    mode = trace.get("mode") or {}
+    metrics.record(
+        kind="chat",
+        kb=kb,
+        cache_hit=cache_hit,
+        answer_kind=answer_kind,
+        judge_status=ambiguity.status if ambiguity is not None else "clear",
+        need_clarification=bool(resp.need_clarification),
+        tool_rounds=tool_rounds,
+        cited=len(resp.sources),
+        candidates=(len(trace["candidates"])
+                    if trace.get("candidates") is not None else None),
+        top_k=top_k,
+        fill_rate=(round(len(chunks) / top_k, 4)
+                   if chunks is not None and top_k else None),
+        rerank={"enabled": bool(mode.get("rerank")), "backend": mode.get("rerank_backend")},
+        retrieve={k: stage.get(k) for k in _STAGE_KEYS},
+        timings={
+            "retrieve_ms": round(retrieve_ms, 1),
+            "generate_ms": round(generate_ms, 1),
+            "ambiguity_ms": round(ambiguity_ms, 1),
+            "total_ms": round((time.perf_counter() - t_start) * 1000, 1),
+        },
+        tokens=tokens or {"prompt": None, "completion": None},
+    )
+
+
 @router.post("", response_model=ChatResponse)
 async def chat(req: ChatRequest, user: User = Depends(get_current_user)) -> ChatResponse:
     """问答：缓存检查 → 检索 → 歧义判定 → (澄清 | Agent 生成) → 写缓存。
@@ -140,19 +184,34 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)) -> Chat
     kb = KB_REAL
     key = _cache_key(req.question, user.department, user.secret_level, settings.top_k, kb)
 
+    # ⭐ `2.0-67`：运行态计时 / 透视（只观测）。`trace` 由 retriever 写入分段耗时。
+    t_start = time.perf_counter()
+    trace: dict = {}
+    amb_usage: dict = {}
+    retrieve_ms = generate_ms = ambiguity_ms = 0.0
+
     # 1. 缓存命中
     cached = await redis.get(key)
     if cached:
         audit("chat", hit_cache=True, question=req.question, user=user.name, department=user.department)
-        return ChatResponse(**json.loads(cached))
+        cached_resp = ChatResponse(**json.loads(cached))
+        _record_request(kb=kb, top_k=settings.top_k, trace=trace, chunks=None,
+                        ambiguity=None, resp=cached_resp, t_start=t_start,
+                        retrieve_ms=0, generate_ms=0, ambiguity_ms=0,
+                        answer_kind="cache", cache_hit=True)
+        return cached_resp
 
     # 2. 检索
-    context, chunks = await retrieve(req.question, departments, secret_level, kb=kb)
+    t_retrieve = time.perf_counter()
+    context, chunks = await retrieve(req.question, departments, secret_level, kb=kb, trace=trace)
+    retrieve_ms = (time.perf_counter() - t_retrieve) * 1000
     audit("retrieve", question=req.question, user=user.name, department=user.department,
           kb=kb, hits=len(chunks))
 
     # 3. 歧义判定（**三态**，P0-1）：明确判为"互相矛盾"才澄清；"无法判断"另走一路（见 4c）
-    ambiguity = await check_ambiguity(req.question, chunks)
+    t_amb = time.perf_counter()
+    ambiguity = await check_ambiguity(req.question, chunks, usage_out=amb_usage)
+    ambiguity_ms = (time.perf_counter() - t_amb) * 1000
     if ambiguity.ambiguous:
         answer = await build_clarification(req.question, ambiguity)
         audit("clarify", question=req.question, user=user.name, options=len(ambiguity.options))
@@ -164,6 +223,11 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)) -> Chat
             judge_status=ambiguity.status,
         )
         await redis.set(key, resp.model_dump_json(), ex=settings.cache_ttl)
+        _record_request(kb=kb, top_k=settings.top_k, trace=trace, chunks=chunks,
+                        ambiguity=ambiguity, resp=resp, t_start=t_start,
+                        retrieve_ms=retrieve_ms, generate_ms=0,
+                        ambiguity_ms=ambiguity_ms, answer_kind="clarify",
+                        tokens=metrics.merge_usage(amb_usage))
         return resp
 
     # 4. 正常生成（系统提示词在 graph_builder 注入，这里只传上下文+问题）
@@ -175,6 +239,7 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)) -> Chat
     #    `recursion_limit` 是 LangGraph 的**步数**上限（⛔ 不是"工具轮次"：
     #    一轮工具 ≈ 2 步，另有起止各 1 步），超限抛 `GraphRecursionError`。
     #    ⚠️ 取值来自实测（`logs/_probe_tool_rounds_2065.json`），⛔ 不是拍的。
+    t_gen = time.perf_counter()
     try:
         # ⭐ `2.0-66`：把**调用者身份**带进工具层（`contextvar`，进程内传递）。
         #    工具侧只做参数级校验；身份**绝不**由模型提供。
@@ -186,6 +251,7 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)) -> Chat
     except GraphRecursionError:
         # ⚠️ **必须与"真故障"分开**：都回"服务器繁忙"就是又一次静默降级。
         #    这里如实说"触到步数上限"，并且**不假装答案是完整的**。
+        generate_ms = (time.perf_counter() - t_gen) * 1000
         audit_err("agent_step_limit", question=req.question, user=user.name,
                   recursion_limit=settings.agent_recursion_limit)
         # ⚠️ `sources=[]`：这次**没有引用任何块**（模型压根没写成答案）。
@@ -193,7 +259,13 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)) -> Chat
         resp = ChatResponse(answer=_STEP_LIMIT_TEXT, sources=[],
                             judge_status=ambiguity.status)
         await redis.set(key, resp.model_dump_json(), ex=settings.cache_ttl)
+        _record_request(kb=kb, top_k=settings.top_k, trace=trace, chunks=chunks,
+                        ambiguity=ambiguity, resp=resp, t_start=t_start,
+                        retrieve_ms=retrieve_ms, generate_ms=generate_ms,
+                        ambiguity_ms=ambiguity_ms, answer_kind="step_limit",
+                        tokens=metrics.merge_usage(amb_usage))
         return resp
+    generate_ms = (time.perf_counter() - t_gen) * 1000
     answer = str(result["messages"][-1].content)
     # ⭐ `2.0-65`：**记录工具轮次**（触发率要有数据，否则下次调上限还是拍）。
     #    只观测，⛔ 不参与任何判断。
@@ -205,12 +277,16 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)) -> Chat
     if not answer.strip():
         # 空答案不再原样返回给用户（原来是一片空白 + 日志无异常）
         answer = _NO_ANSWER_TEXT
+        answer_kind = "empty"
         audit_err("answer_empty", question=req.question, user=user.name)
     elif ambiguity.unknown:
         # 判定器**没给出有效结论** → 答案照给，但标注 + 反问用户（不静默）
         answer = _annotate_unverified(answer, ambiguity.reason, chunks)
+        answer_kind = "unverified"
         audit_err("answer_unverified", question=req.question, user=user.name,
                   judge_reason=ambiguity.reason)
+    else:
+        answer_kind = "normal"
 
     # 5. 引用校验：sources 只返回 LLM **实际引用**的块（而非全部检索结果）
     cited = _cited_chunks(chunks, answer)
@@ -221,4 +297,11 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)) -> Chat
     resp = ChatResponse(answer=answer, sources=_to_sources(cited),
                         judge_status=ambiguity.status)
     await redis.set(key, resp.model_dump_json(), ex=settings.cache_ttl)
+    _record_request(kb=kb, top_k=settings.top_k, trace=trace, chunks=chunks,
+                    ambiguity=ambiguity, resp=resp, t_start=t_start,
+                    retrieve_ms=retrieve_ms, generate_ms=generate_ms,
+                    ambiguity_ms=ambiguity_ms, answer_kind=answer_kind,
+                    tool_rounds=tool_rounds,
+                    tokens=metrics.merge_usage(
+                        metrics.usage_from_messages(result["messages"]), amb_usage))
     return resp

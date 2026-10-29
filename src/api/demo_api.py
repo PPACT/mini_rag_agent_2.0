@@ -24,6 +24,7 @@ from src.auth.deps import DEMO_USERS
 from src.config.prompts import load_templates
 from src.config.settings import get_settings
 from src.db.kb import KB_REAL, KB_STRESS, validate
+from src.observability import metrics
 from src.rag.ambiguity import check_ambiguity
 from src.rag.reranker import VALID_BACKENDS, resolve_backend
 from src.rag.retriever import retrieve
@@ -87,6 +88,7 @@ async def demo_ask(req: AskRequest) -> dict:
     candidates = trace.get("candidates", [])
     final = trace.get("final", [])
     answer, cited, generate_ms = None, [], 0
+    gen_usage: dict = {}
 
     if req.with_answer and settings.llm_api_key and final:
         _, human_tpl = load_templates()
@@ -106,6 +108,7 @@ async def demo_ask(req: AskRequest) -> dict:
                     config={"recursion_limit": settings.agent_recursion_limit},
                 )
             answer = str(result["messages"][-1].content)
+            gen_usage = metrics.usage_from_messages(result["messages"])
             if not answer.strip():
                 # 与 /chat 一致（P0-4）：空答案**显式化**，不把空白当正常答案返回
                 answer = "[生成环节未返回内容]"
@@ -121,9 +124,36 @@ async def demo_ask(req: AskRequest) -> dict:
 
     # 歧义判定也是 LLM 调用（1-3 秒），必须计时——否则页面显示的"合计"会远低于真实等待
     t2 = time.perf_counter()
-    amb = await check_ambiguity(req.question, final) if final else None
+    amb_usage: dict = {}
+    amb = (await check_ambiguity(req.question, final, usage_out=amb_usage)
+           if final else None)
     ambiguity_ms = int((time.perf_counter() - t2) * 1000)
     total_ms = retrieve_ms + generate_ms + ambiguity_ms
+
+    # ⭐ `2.0-67`：透视页的这次请求也进监控缓冲（同一份数据源，⛔ 不改响应）。
+    _mode = trace.get("mode") or {}
+    _stage = trace.get("timings") or {}
+    # ⚠️ `getattr`：指标只观测，⛔ 不该因为"配置对象缺字段"把问答带崩
+    _top_k = getattr(settings, "top_k", None)
+    metrics.record(
+        kind="demo",
+        kb=kb,
+        cache_hit=False,
+        answer_kind="answer" if answer is not None else "retrieve_only",
+        judge_status=(amb.status if amb else "clear"),
+        need_clarification=bool(amb and amb.ambiguous),
+        tool_rounds=None,
+        cited=len(cited),
+        candidates=len(candidates),
+        top_k=_top_k,
+        fill_rate=round(len(final) / _top_k, 4) if _top_k else None,
+        rerank={"enabled": bool(_mode.get("rerank")),
+                "backend": _mode.get("rerank_backend")},
+        retrieve={k: _stage.get(k) for k in metrics.STAGE_KEYS},
+        timings={"retrieve_ms": retrieve_ms, "generate_ms": generate_ms,
+                 "ambiguity_ms": ambiguity_ms, "total_ms": total_ms},
+        tokens=metrics.merge_usage(gen_usage, amb_usage),
+    )
 
     return {
         "question": req.question,
