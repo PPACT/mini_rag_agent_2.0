@@ -78,7 +78,9 @@ async def demo_ask(req: AskRequest) -> dict:
 
     trace: dict = {}
     t0 = time.perf_counter()
-    _, chunks = await retrieve(
+    # ⭐ 复用 `retrieve()` 已格式化好的上下文（含 `<untrusted_content>` 隔离与复杂表原表）——
+    #    这里**不要**自己重拼：两份实现已经漂移过一次（丢了注入防护与 `raw_table`）。
+    ctx, chunks = await retrieve(
         req.question, departments, user.secret_level, kb=kb,
         use_hybrid=req.use_hybrid, use_rerank=req.use_rerank,
         rerank_backend=eff_backend, trace=trace,
@@ -92,10 +94,6 @@ async def demo_ask(req: AskRequest) -> dict:
 
     if req.with_answer and settings.llm_api_key and final:
         _, human_tpl = load_templates()
-        ctx = "\n\n".join(
-            f"[来源{i}] (文件:{c.source_file}, 块:{c.chunk_index})\n{c.content}"
-            for i, c in enumerate(final, 1)
-        )
         t1 = time.perf_counter()
         try:
             agent = get_agent()

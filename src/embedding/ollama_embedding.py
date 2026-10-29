@@ -70,7 +70,15 @@ class OllamaEmbedding(BaseEmbedding):
         client = self._get_client()
         for i in range(0, len(texts), self._batch_size):
             batch = texts[i : i + self._batch_size]
-            result.extend(await self._embed_batch(client, batch))
+            embeddings = await self._embed_batch(client, batch)
+            # ⚠️ **条数必须逐批核对**：下游 `zip(chunks, embeddings)` 少一条就**静默丢块**，
+            #    入库少几块、检索永远召回不到，而且没有任何报错。宁可失败也不要悄悄变少。
+            if len(embeddings) != len(batch):
+                raise ValueError(
+                    f"embedding 条数不匹配：请求 {len(batch)} 条、返回 {len(embeddings)} 条"
+                    f"（模型 {self._model}）—— 拒绝继续，避免静默丢块"
+                )
+            result.extend(embeddings)
         return result
 
     async def _embed_batch(self, client: httpx.AsyncClient, texts: list[str]) -> list[list[float]]:

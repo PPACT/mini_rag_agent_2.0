@@ -96,3 +96,22 @@ def test_demo_normal_answer_unaffected(monkeypatch):
     out = _ask()
     assert out["answer"] == "年假五天。"
     assert "步数上限" not in out["answer"]
+
+
+def test_demo_uses_context_from_retrieve(monkeypatch):
+    """上下文必须**原样**用 `retrieve()` 的返回值。
+
+    旧实现自己重拼，丢了 `<untrusted_content>` 隔离与复杂表 `raw_table` ——
+    演示链路与 `/chat` 不同源。这里用 `"ctx"` 这个哨兵值证明没有重拼。
+    """
+    seen: list = []
+    agent = _FakeAgent()
+
+    async def _ainvoke(payload, config=None):  # noqa: ARG001
+        seen.append(payload["messages"][0].content)
+        return {"messages": [AIMessage(content="ok")]}
+
+    monkeypatch.setattr(agent, "ainvoke", _ainvoke)
+    _wire(monkeypatch, agent)
+    _ask()
+    assert seen and "ctx" in seen[0], f"没有复用 retrieve() 的上下文：{seen}"

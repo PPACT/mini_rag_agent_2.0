@@ -258,13 +258,21 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)) -> Chat
         #    把所有检索结果都列出来 = 暗示"这些被用上了"，与别的分支口径不一致。
         resp = ChatResponse(answer=_STEP_LIMIT_TEXT, sources=[],
                             judge_status=ambiguity.status)
-        await redis.set(key, resp.model_dump_json(), ex=settings.cache_ttl)
+        # ⛔ **不写缓存**：触限是"这一次跑坏了"，不是关于问题的结论。
+        #    缓存 1 小时 = 同一问题在窗口内反复命中同一次故障。
+        #    （只缓存 normal / clarify —— 见下方最终写缓存的判据。）
         _record_request(kb=kb, top_k=settings.top_k, trace=trace, chunks=chunks,
                         ambiguity=ambiguity, resp=resp, t_start=t_start,
                         retrieve_ms=retrieve_ms, generate_ms=generate_ms,
                         ambiguity_ms=ambiguity_ms, answer_kind="step_limit",
                         tokens=metrics.merge_usage(amb_usage))
         return resp
+    except Exception as e:  # noqa: BLE001
+        # ⚠️ 生成路径此前**只有超限一个分支**：任何上游故障都直接冒泡 500，审计里查不到。
+        #    这里只补**审计**，不改对外状态码（要不要改成 503 / 降级话术是另一件事）。
+        audit_err("generate_failed", question=req.question, user=user.name,
+                  error=type(e).__name__)
+        raise
     generate_ms = (time.perf_counter() - t_gen) * 1000
     answer = str(result["messages"][-1].content)
     # ⭐ `2.0-65`：**记录工具轮次**（触发率要有数据，否则下次调上限还是拍）。
@@ -296,7 +304,10 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)) -> Chat
     # 6. 组装 + 写缓存
     resp = ChatResponse(answer=answer, sources=_to_sources(cited),
                         judge_status=ambiguity.status)
-    await redis.set(key, resp.model_dump_json(), ex=settings.cache_ttl)
+    # ⚠️ **只缓存正常答案**（澄清分支在上方单独缓存）：`empty` / `unverified` 都是
+    #    "这次没跑好"的状态，缓存 1 小时会把偶发故障固化成关于这个问题的结论。
+    if answer_kind == "normal":
+        await redis.set(key, resp.model_dump_json(), ex=settings.cache_ttl)
     _record_request(kb=kb, top_k=settings.top_k, trace=trace, chunks=chunks,
                     ambiguity=ambiguity, resp=resp, t_start=t_start,
                     retrieve_ms=retrieve_ms, generate_ms=generate_ms,

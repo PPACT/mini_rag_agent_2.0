@@ -186,10 +186,24 @@ def test_empty_answer_takes_precedence_over_annotation(monkeypatch):
 # ---- 缓存 ----
 
 
-def test_result_is_cached(monkeypatch):
-    fake, _ = _wire(monkeypatch, ambiguity=AmbiguityResult(status="unknown", reason="x"))
+def test_normal_result_is_cached(monkeypatch):
+    fake, _ = _wire(monkeypatch, ambiguity=AmbiguityResult(status="clear"))
     _ask()
     assert len(fake.stored) == 1
+
+
+def test_unverified_result_is_not_cached(monkeypatch):
+    """`unknown` 是"这次没判出来"，不是关于问题的结论 —— 缓存会把偶发故障固化 1 小时。"""
+    fake, _ = _wire(monkeypatch, ambiguity=AmbiguityResult(status="unknown", reason="x"))
+    _ask()
+    assert len(fake.stored) == 0
+
+
+def test_empty_result_is_not_cached(monkeypatch):
+    """反向用例：空答案（`empty`）同样不写缓存。"""
+    fake, _ = _wire(monkeypatch, answer="   ", ambiguity=AmbiguityResult())
+    _ask()
+    assert len(fake.stored) == 0
 
 
 def test_cache_hit_short_circuits_retrieval(monkeypatch):
@@ -244,12 +258,15 @@ def test_step_limit_returns_distinct_message(monkeypatch):
     assert resp.need_clarification is False
 
 
-def test_step_limit_result_is_cached(monkeypatch):
-    """固定话术也是可缓存的结论 —— 否则同一问题每次都重新跑一遍循环。"""
+def test_step_limit_result_is_not_cached(monkeypatch):
+    """⚠️ 反向用例：触限写缓存会让"同一问题 1 小时内反复命中同一次故障"。
+
+    旧行为是缓存（`test_step_limit_result_is_cached`），2026-10-29 改为不缓存。
+    """
     fake, _ = _wire(monkeypatch,
                     agent=_FakeAgent("", raises=GraphRecursionError("limit")))
     _ask()
-    assert len(fake.stored) == 1
+    assert len(fake.stored) == 0
 
 
 def test_normal_answer_never_mentions_step_limit(monkeypatch):

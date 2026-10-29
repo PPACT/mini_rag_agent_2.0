@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from src.embedding import base as emb
 from src.embedding.ollama_embedding import OllamaEmbedding, _is_loopback
 
@@ -88,3 +90,28 @@ def test_remote_embedding_still_honours_env_proxy(monkeypatch):
     monkeypatch.setattr(e, "_base_url", "http://ollama.internal:11434")
     assert e._get_client().trust_env is True
     asyncio.run(e.aclose())
+
+
+# ===== 返回条数必须核对（否则 zip 静默丢块）=====
+
+
+def test_embed_returns_one_vector_per_text(monkeypatch):
+    e = OllamaEmbedding()
+
+    async def _ok(_client, batch):
+        return [[0.0] * e._dim for _ in batch]
+
+    monkeypatch.setattr(e, "_embed_batch", _ok)
+    assert len(asyncio.run(e.embed(["a", "b", "c"]))) == 3
+
+
+def test_embed_raises_when_model_returns_fewer(monkeypatch):
+    """反向用例：少返回一条必须报错，⛔ 不能交给下游 zip 静默丢块。"""
+    e = OllamaEmbedding()
+
+    async def _short(_client, batch):
+        return [[0.0] * e._dim for _ in batch[:-1]]
+
+    monkeypatch.setattr(e, "_embed_batch", _short)
+    with pytest.raises(ValueError, match="条数不匹配"):
+        asyncio.run(e.embed(["a", "b", "c"]))
