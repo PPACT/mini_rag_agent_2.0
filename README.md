@@ -2,16 +2,25 @@
 
 <div align="center">
 
-  <!-- 第一排徽章 -->
+  <!-- 大标题在上方 -->
+  <h1 align="center">🧠 mini_rag_agent_2.0</h1>
+  
+  <p align="center">
+    <b>企业知识库 RAG-Agent（2.0 重构中）—— 可溯源 · 会拒答 · 能发现文档冲突</b>
+  </p>
+  
+  <p align="center">
+    目标不止答疑：把散落的文档变成<b>有结构、有关系、值得信</b>的知识底座
+    <br />
+    知识库侧全本地可跑（PG + pgvector + 本地 embedding），仅生成走云端 LLM
+  </p>
+
+  <!-- 徽章在下方，使用 flat-square 扁平样式，系统会自动紧凑居中，绝不强制换行 -->
   <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI" />
   <img src="https://img.shields.io/badge/PostgreSQL_17-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL" />
   <img src="https://img.shields.io/badge/pgvector-336791?style=flat-square" alt="pgvector" />
   <img src="https://img.shields.io/badge/Redis-DC382D?style=flat-square&logo=redis&logoColor=white" alt="Redis" />
-  
-  <br />
-  
-  <!-- 第二排徽章，强制 5 个，保证完美对称 -->
   <img src="https://img.shields.io/badge/Ollama-000000?style=flat-square&logo=ollama&logoColor=white" alt="Ollama" />
   <img src="https://img.shields.io/badge/LangGraph-1C3C3C?style=flat-square&logo=langchain&logoColor=white" alt="LangGraph" />
   <img src="https://img.shields.io/badge/MCP-000000?style=flat-square" alt="MCP" />
@@ -19,21 +28,6 @@
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square" alt="License: MIT" />
 
   <br /><br />
-
-  <!-- 标题字号改回 h3，去掉被过度撑开的视觉感 -->
-  <h3 align="center">🤖 mini_rag_agent_2.0</h3>
-  
-  <p align="center">
-    <b>企业知识库 RAG-Agent（2.0 重构中）</b>
-    <br />
-    <i>可溯源 · 会拒答 · 能发现文档冲突</i>
-  </p>
-
-  <p align="center">
-    目标不止答疑：把散落的文档变成<b>有结构、有关系、值得信</b>的知识底座
-    <br />
-    知识库侧全本地可跑（PG + pgvector + 本地 embedding），仅生成走云端 LLM
-  </p>
 
   <!-- 快捷链接 -->
   <p align="center">
@@ -45,8 +39,6 @@
   </p>
 
 </div>
-
----
 
 <br />
 
