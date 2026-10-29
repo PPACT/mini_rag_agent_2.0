@@ -1,37 +1,48 @@
 <a id="readme-top"></a>
 
-<!-- ============================================================
-     徽章：使用引用式链接写法，所有 URL 集中在文件末尾。
-     ============================================================ -->
 <div align="center">
 
-[![Python][py-shield]][py-url]
-[![FastAPI][fastapi-shield]][fastapi-url]
-[![PostgreSQL][pg-shield]][pg-url]
-[![pgvector][pgv-shield]][pgv-url]
-[![Redis][redis-shield]][redis-url]
-[![Ollama][ollama-shield]][ollama-url]
-[![LangGraph][lg-shield]][lg-url]
-[![MCP][mcp-shield]][mcp-url]
-[![Docker][docker-shield]][docker-url]
-[![License: MIT][mit-shield]][mit-url]
+  <!-- 第一排徽章 -->
+  <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/PostgreSQL_17-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostgreSQL" />
+  <img src="https://img.shields.io/badge/pgvector-336791?style=for-the-badge" alt="pgvector" />
+  <img src="https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white" alt="Redis" />
 
-<br />
-
-<h3 align="center">mini_rag_agent_2.0</h3>
-<p align="center">
-  <b>企业知识库 RAG-Agent</b>（2.0 重构中）—— 可溯源 · 会拒答 · 能发现文档冲突
   <br />
-  目标不止答疑：把散落的文档变成<b>有结构、有关系、值得信</b>的知识底座
-  <br />
-  知识库侧全本地可跑（PG + pgvector + 本地 embedding），仅生成走云端 LLM
-</p>
 
-<p align="center">
-  <a href="docs/架构方案.md"><strong>看架构设计 »</strong></a>
-  &middot; <a href="#quick-start">快速开始</a>
-  &middot; <a href="#known-boundaries">已知边界</a>
-</p>
+  <!-- 第二排徽章 -->
+  <img src="https://img.shields.io/badge/Ollama-000000?style=for-the-badge&logo=ollama&logoColor=white" alt="Ollama" />
+  <img src="https://img.shields.io/badge/LangGraph-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white" alt="LangGraph" />
+  <img src="https://img.shields.io/badge/MCP-000000?style=for-the-badge" alt="MCP" />
+  <img src="https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
+  <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License: MIT" />
+
+  <br /><br />
+
+  <!-- 大标题与副标题 -->
+  <h1 align="center">🤖 mini_rag_agent_2.0</h1>
+  
+  <p align="center">
+    <b>企业知识库 RAG-Agent（2.0 重构中）</b>
+    <br />
+    <i>可溯源 · 会拒答 · 能发现文档冲突</i>
+  </p>
+
+  <p align="center">
+    目标不止答疑：把散落的文档变成<b>有结构、有关系、值得信</b>的知识底座
+    <br />
+    知识库侧全本地可跑（PG + pgvector + 本地 embedding），仅生成走云端 LLM
+  </p>
+
+  <!-- 快捷链接 -->
+  <p align="center">
+    <a href="docs/架构方案.md"><strong>看架构设计 »</strong></a>
+    &middot; 
+    <a href="#quick-start">快速开始</a>
+    &middot; 
+    <a href="#known-boundaries">已知边界</a>
+  </p>
 
 </div>
 
@@ -420,32 +431,6 @@ MIT —— 见 [`LICENSE`](LICENSE)。
 <p align="right">(<a href="#readme-top">回到顶部</a>)</p>
 
 ---
-
-<!-- ============================================================
-     链接定义：所有外部 URL 集中在此处。
-     改链接 / 换徽章只动这里，正文不用碰。
-     ============================================================ -->
-
-[py-shield]: https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white
-[py-url]: https://www.python.org/
-[fastapi-shield]: https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white
-[fastapi-url]: https://fastapi.tiangolo.com/
-[pg-shield]: https://img.shields.io/badge/PostgreSQL_17-4169E1?style=for-the-badge&logo=postgresql&logoColor=white
-[pg-url]: https://www.postgresql.org/
-[pgv-shield]: https://img.shields.io/badge/pgvector-336791?style=for-the-badge
-[pgv-url]: https://github.com/pgvector/pgvector
-[redis-shield]: https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white
-[redis-url]: https://redis.io/
-[ollama-shield]: https://img.shields.io/badge/Ollama-000000?style=for-the-badge&logo=ollama&logoColor=white
-[ollama-url]: https://ollama.com/
-[lg-shield]: https://img.shields.io/badge/LangGraph-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white
-[lg-url]: https://langchain-ai.github.io/langgraph/
-[mcp-shield]: https://img.shields.io/badge/MCP-000000?style=for-the-badge
-[mcp-url]: https://modelcontextprotocol.io/
-[docker-shield]: https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white
-[docker-url]: https://www.docker.com/
-[mit-shield]: https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge
-[mit-url]: LICENSE
 
 <!-- 有截图后取消 README 顶部的注释，并把图放到被 git 跟踪的目录 -->
 [demo-screenshot]: docs/assets/demo.png
