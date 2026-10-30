@@ -1,4 +1,4 @@
-"""`2.0-7` 分层评估集（50 题）—— **两轮：纯向量 / 混合检索+重排**。
+"""`2.0-7` 分层评估集（60 题：45 可答 ＋ 15 无答案）—— **四臂对照**。
 
 口径见 `内部评测口径`（题面在同目录 `layered_eval_50q.md`）。
 
@@ -79,6 +79,10 @@ from src.rag.retriever import retrieve  # noqa: E402
 
 DATASET = Path(__file__).resolve().parent / "local" / "dataset_layered_50q.jsonl"
 
+# 2026-10-30 题集扩容：无答案题 5 → 15，合计 **60**（文件名沿用旧名，避免动历史引用）。
+# ⚠️ 检索分母**不变**：无答案题没有 anchor，天然不进 `R@K` / `AllHit@K` 的分母（45 题）。
+EXPECTED_QUESTIONS = 60
+
 # ⚠️ 每个臂都把**三个开关显式给全**（§四 的静默陷阱）；名字即产物里的列名。
 # ⭐ `2.0-49` **四臂**：把「混合」与「重排」**拆开** ——
 #    原来那两轮**差了整整两个变量**（`hybrid` 与 `rerank` 同开同关），
@@ -119,7 +123,7 @@ def load_dataset() -> list[dict]:
             "   它**不入库**（题面/anchor/答案是语料派生，协议 §12.5）——\n"
             "   请从 内部评测口径 重建到 eval/local/。")
     rows = [json.loads(ln) for ln in DATASET.read_text(encoding="utf-8").splitlines() if ln.strip()]
-    assert len(rows) == 50, f"应 50 题，实际 {len(rows)}"
+    assert len(rows) == EXPECTED_QUESTIONS, f"应 {EXPECTED_QUESTIONS} 题，实际 {len(rows)}"
     return rows
 
 
