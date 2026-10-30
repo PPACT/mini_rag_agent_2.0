@@ -403,6 +403,7 @@ RERANK_BACKEND=llm PYTHONIOENCODING=utf-8 python -m uvicorn src.main:app
 |---|---|
 | [`docs/架构方案.md`](docs/架构方案.md) | 系统设计：定位 / 选型 / 分层 / 数据模型 / 真实链路 / 扩展点 |
 | [`docs/开发记录.md`](docs/开发记录.md) | 搭建过程、踩坑记录、关键设计决策的**理由** |
+| [`docs/评测口径.md`](docs/评测口径.md) | 效果用什么尺子量：评测集 schema / 指标定义 / 命中判据 / 实验纪律 |
 | [`docs/README.md`](docs/README.md) | 文档目录的边界与放置规则 |
 
 ```bash
