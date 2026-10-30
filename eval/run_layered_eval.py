@@ -146,6 +146,24 @@ def refuse_exit(ans: str, err: str | None) -> str:
     return "none"
 
 
+def ambiguity_observation(amb, chunks) -> dict:
+    """歧义判定的**可追溯字段**（⛔ 纯观测，不参与任何对错判定）。
+
+    只存 `status` 时，"判官为何判无冲突"事后查不到 —— 产物里没有理由，
+    只能重跑一遍（那要起检索环境）。`candidates` 用来核对判官**看到了哪几块**，
+    把"没看见"与"看见了仍判错"分开 —— 这两种情况的处置完全不同。
+
+    `judge_failure_kind`（`2.0-58`）是 `unknown` 的成因（timeout / transient /
+    fatal / unanswered / unparsed / other）：**同一票 `unknown` 背后是不同的病**。
+    """
+    return {
+        "need_clarification": amb.ambiguous, "judge_status": amb.status,
+        "judge_failure_kind": amb.failure_kind,
+        "ambiguity_reason": amb.reason,
+        "candidates": [c.source_file for c in chunks],
+    }
+
+
 def rank_of(chunks, anchors: list[str]) -> tuple[int | None, list[int | None]]:
     """命中 = **块内容**里含 anchor（⚠️ 不是"文件对上了就算"）。
 
@@ -242,11 +260,7 @@ async def one_round(name: str, mode: dict, dataset, kb: str, top: int, model, se
                 "pre_rank": pre_rank, "pre_vec_score": pre_vec_score, "pool_n": len(cands),
                 "hit_source": hit_src, "answer": ans, "gen_error": err,
                 "refuse_exit": rx, "refused": refused,
-                "need_clarification": amb.ambiguous, "judge_status": amb.status,
-                # ⭐ `2.0-58`：`unknown` 的**成因**（timeout / transient / fatal /
-                #    unanswered / unparsed / other）。此前一律记成 `unknown`，
-                #    一次"整批 unknown"是外部故障还是结构性缺陷**分不出来**。
-                "judge_failure_kind": amb.failure_kind,
+                **ambiguity_observation(amb, chunks),
                 "ctx_ok": ctx_ok, "ctx_rule": ctx_rule,
                 "answer_wrong": answer_wrong, "answer_judge": answer_judge,
                 # ⭐ `2.0-59` 工程层埋点（**只观测**，⛔ 不影响上面任何判定）
