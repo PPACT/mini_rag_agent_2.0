@@ -389,7 +389,7 @@ RERANK_BACKEND=llm PYTHONIOENCODING=utf-8 python -m uvicorn src.main:app
 - **权限**：部门 + 密级，服务端强制过滤。
 - **部署**：embedding 与精排可全本地、不出网；换 LLM 服务商只改配置。
 
-> 图片与扫描件的文字识别、网页正文提取、清洗规则组目前尚未接入。完整的实现边界与演进计划见 [`docs/架构方案.md`](docs/架构方案.md)。
+> 图片与扫描件的文字识别、清洗规则组目前尚未接入。完整的实现边界与演进计划见 [`docs/架构方案.md`](docs/架构方案.md)。
 
 <p align="right">(<a href="#readme-top">回到顶部</a>)</p>
 
